@@ -1,0 +1,101 @@
+cabal-version: 3.0
+name: c2uplc
+version: 1.0.0
+synopsis: UPLC code generator for Covenant IR
+description:
+  An executable converting valid Covenant IR serial forms into UPLC code.
+
+homepage: https://github.com/mlabs-haskell/c2uplc
+license: Apache-2.0
+license-file: LICENSE
+author: Koz Ross, Sean Hunter
+maintainer: koz@mlabs.city, sean@mlabs.city
+bug-reports: https://github.com/mlabs-haskell/c2uplc/issues
+copyright: (C) MLabs 2025
+category: Covenant
+tested-with: ghc ==9.8.4
+build-type: Simple
+extra-source-files:
+  CHANGELOG.md
+  README.md
+
+-- Common sections
+common lang
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wredundant-bang-patterns
+    -Wredundant-strictness-flags
+    -Wmissing-deriving-strategies
+    -Woperator-whitespace
+    -Wambiguous-fields
+    -Wmisplaced-pragmas
+    -Wmissing-export-lists
+    -Wmissing-import-lists
+
+  default-extensions:
+    BangPatterns
+    BinaryLiterals
+    DataKinds
+    DeriveTraversable
+    DerivingVia
+    DuplicateRecordFields
+    EmptyCase
+    FlexibleContexts
+    FlexibleInstances
+    GeneralizedNewtypeDeriving
+    HexFloatLiterals
+    ImportQualifiedPost
+    InstanceSigs
+    KindSignatures
+    LambdaCase
+    MultiParamTypeClasses
+    NoFieldSelectors
+    NoStarIsType
+    NumericUnderscores
+    OverloadedLabels
+    OverloadedStrings
+    PackageImports
+    ScopedTypeVariables
+    StandaloneDeriving
+    TupleSections
+    TypeApplications
+    TypeFamilies
+    TypeOperators
+    UndecidableInstances
+
+  build-depends:
+    base >=4.19.0.0 && <5,
+    covenant,
+
+  default-language: Haskell2010
+
+common test-lang
+  import: lang
+  ghc-options:
+    -O2
+    -threaded
+    -rtsopts
+    -with-rtsopts=-N
+
+  build-depends:
+    QuickCheck ==2.15.0.1,
+    c2uplc,
+    containers >=0.6.8 && <0.8,
+    prettyprinter ==1.7.1,
+    tasty ==1.5.3,
+    tasty-expected-failure ==0.12.3,
+    tasty-hunit ==0.10.2,
+    tasty-quickcheck ==0.11.1,
+
+-- Executable
+executable c2uplc
+  import: lang
+  main-is: Main.hs
+  hs-source-dirs: app
+
+-- Primary library
+library
+  import: lang
+  exposed-modules: Covenant.Codegen
+  hs-source-dirs: src

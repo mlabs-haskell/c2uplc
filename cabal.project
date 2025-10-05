@@ -1,0 +1,13 @@
+packages: ./c2uplc.cabal
+
+tests: true
+
+test-show-details: direct
+
+package c2uplc
+  ghc-options: -Werror
+
+source-repository-package
+  type: git
+  location: https://github.com/mlabs-haskell/covenant
+  tag: bbeb920f8cb0d4886da020181bd0bd173d70f316
