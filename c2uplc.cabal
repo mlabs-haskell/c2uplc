@@ -93,6 +93,9 @@ executable c2uplc
   import: lang
   main-is: Main.hs
   hs-source-dirs: app
+  build-depends:
+    filepath ==1.4.301.0,
+    optparse-applicative ==0.19.0.0,
 
 -- Primary library
 library
