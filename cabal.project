@@ -56,13 +56,13 @@ allow-newer:
   , inline-r:bytestring
   , inline-r:containers
   , inline-r:primitive
-
-allow-newer:
+  , covenant:QuickCheck
+  , covenant:quickcheck-instances
   -- https://github.com/phadej/vec/issues/121
-  ral:QuickCheck,
-  fin:QuickCheck,
-  bin:QuickCheck,
+  , ral:QuickCheck
+  , fin:QuickCheck
+  , bin:QuickCheck
+  -- https://github.com/IntersectMBO/plutus/pull/7236
+  , turtle:optparse-applicative
 
--- https://github.com/IntersectMBO/plutus/pull/7236
 constraints: setup.optparse-applicative >=0.19.0.0
-allow-newer: turtle:optparse-applicative
