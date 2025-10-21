@@ -22,10 +22,10 @@ extra-source-files:
 -- Common sections
 common lang
   ghc-options:
-    -Wall -Wcompat -Wredundant-bang-patterns
     -Wredundant-strictness-flags -Wmissing-deriving-strategies
-    -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas
-    -Wmissing-export-lists -Wmissing-import-lists
+    -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
+    -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
+    -Wmissing-import-lists
 
   default-extensions:
     BangPatterns
@@ -76,13 +76,17 @@ common test-lang
   ghc-options:   -O2 -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     , c2uplc
-    , containers              >=0.6.8    && <0.8
+    , containers              >=0.6.8  && <0.8
+    , covenant                ==1.3.0
     , prettyprinter           ==1.7.1
-    , QuickCheck              ==2.15.0.1
+    , QuickCheck
     , tasty                   ==1.5.3
     , tasty-expected-failure  ==0.12.3
     , tasty-hunit             ==0.10.2
     , tasty-quickcheck        ==0.11.1
+    , text
+    , transformers
+    , vector
 
 -- Executable
 executable c2uplc
@@ -96,7 +100,17 @@ executable c2uplc
 -- Primary library
 library
   import:          lang
-  exposed-modules: Covenant.CodeGen
+  exposed-modules:
+    Covenant.ArgDict
+    Covenant.CodeGen
+
   other-modules:   Covenant.MockPlutus
   hs-source-dirs:  src
   build-depends:   plutus-core ==1.51.0.0
+
+test-suite arg-resolution
+  import:         test-lang
+  type:           exitcode-stdio-1.0
+  main-is:        Main.hs
+  hs-source-dirs: test/arg-resolution
+  build-depends:  plutus-core ==1.51.0.0

@@ -1,40 +1,77 @@
 {-# LANGUAGE GADTs #-}
 
-module Covenant.MockPlutus where
+{- HLINT ignore "Use camelCase" -}
+
+module Covenant.MockPlutus (
+    PlutusTerm,
+    pVar,
+    pLam,
+    pApp,
+    pForce,
+    pDelay,
+    pError,
+    pConstant,
+    pConstr,
+    plutus_I,
+    plutus_ConstrData,
+    pDataList,
+    iData,
+    bData,
+    constrData,
+    listData,
+    mapData,
+    SomeBuiltin (..),
+    pBuiltin,
+    pCase,
+    idName,
+) where
 
 import Covenant.Constant (AConstant)
+import Covenant.Prim (OneArgFunc, SixArgFunc, ThreeArgFunc, TwoArgFunc)
+import Covenant.Test (Id (UnsafeId))
 import Data.Vector (Vector)
-import Covenant.Prim (OneArgFunc, TwoArgFunc, ThreeArgFunc, SixArgFunc)
+import Data.Vector qualified as Vector
 import Data.Word (Word64)
-import Covenant.ASG (Id)
+import PlutusCore (Name)
+import PlutusCore.Default (Some, ValueOf)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Term (Apply, Constant, Constr, Delay, Error, Force, LamAbs, Var))
 
 -- mock Plutus types and placeholder helpers
-data PlutusTerm
-
-data Name
+type PlutusTerm = Term Name DefaultUni DefaultFun ()
 
 pVar :: Name -> PlutusTerm
-pVar = undefined
+pVar = Var ()
 
 pLam :: Name -> PlutusTerm -> PlutusTerm
-pLam = undefined
+pLam = LamAbs ()
 
 pApp :: PlutusTerm -> PlutusTerm -> PlutusTerm
-pApp = undefined
+pApp = Apply ()
 
 pForce :: PlutusTerm -> PlutusTerm
-pForce = undefined
+pForce = Force ()
 
 pDelay :: PlutusTerm -> PlutusTerm
-pDelay = undefined
+pDelay = Delay ()
+
+pError :: PlutusTerm
+pError = Error ()
+
+pCase :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+pCase = undefined
 
 pConstant :: AConstant -> PlutusTerm
-pConstant = undefined
+pConstant = Constant () . constantHelper
+  where
+    constantHelper :: AConstant -> Some (ValueOf DefaultUni)
+    constantHelper = error "TODO (need to track down the module in Plutus w/ the functions I need)"
+
+pConstr :: Word64 -> Vector PlutusTerm -> PlutusTerm
+pConstr w = Constr () w . Vector.toList
 
 -- NOTE: I totally forget how you construct data values with PLC functions...
 plutus_I :: Integer -> PlutusTerm
 plutus_I = undefined
-
 
 -- Fill in w/ whatever makes the `Constr` branch of PlutusData
 plutus_ConstrData :: Integer -> Vector PlutusTerm -> PlutusTerm
@@ -66,22 +103,13 @@ mapData :: Vector PlutusTerm -> PlutusTerm
 mapData = undefined
 
 data SomeBuiltin where
-  SomeBuiltin1 :: OneArgFunc -> SomeBuiltin
-  SomeBuiltin2 :: TwoArgFunc -> SomeBuiltin
-  SomeBuiltin3 :: ThreeArgFunc -> SomeBuiltin
-  SomeBuiltin6 :: SixArgFunc -> SomeBuiltin
+    SomeBuiltin1 :: OneArgFunc -> SomeBuiltin
+    SomeBuiltin2 :: TwoArgFunc -> SomeBuiltin
+    SomeBuiltin3 :: ThreeArgFunc -> SomeBuiltin
+    SomeBuiltin6 :: SixArgFunc -> SomeBuiltin
 
 pBuiltin :: SomeBuiltin -> PlutusTerm
 pBuiltin = undefined
 
-pError :: PlutusTerm
-pError = undefined
-
-pConstr :: Word64 -> Vector PlutusTerm -> PlutusTerm
-pConstr = undefined
-
-pCase :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
-pCase = undefined
-
 idName :: Id -> Name
-idName = undefined
+idName (UnsafeId _i) = undefined
