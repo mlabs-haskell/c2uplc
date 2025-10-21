@@ -76,7 +76,7 @@ common test-lang
   ghc-options:   -O2 -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     , c2uplc
-    , containers              >=0.6.8  && <0.8
+    , containers              >=0.6.8    && <0.8
     , covenant                ==1.3.0
     , prettyprinter           ==1.7.1
     , QuickCheck
@@ -84,9 +84,9 @@ common test-lang
     , tasty-expected-failure  ==0.12.3
     , tasty-hunit             ==0.10.2
     , tasty-quickcheck        ==0.11.1
-    , text
-    , transformers
-    , vector
+    , text                    ==2.1.1
+    , transformers            ==0.6.1.0
+    , vector                  ==0.13.2.0
 
 -- Executable
 executable c2uplc
