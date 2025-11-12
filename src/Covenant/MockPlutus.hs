@@ -28,7 +28,7 @@ module Covenant.MockPlutus (
 
 import Covenant.Constant (AConstant)
 import Covenant.Prim (OneArgFunc, SixArgFunc, ThreeArgFunc, TwoArgFunc)
-import Covenant.Test (Id (UnsafeId))
+import Covenant.Test (Id (UnsafeMkId))
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Data.Word (Word64)
@@ -112,4 +112,4 @@ pBuiltin :: SomeBuiltin -> PlutusTerm
 pBuiltin = undefined
 
 idName :: Id -> Name
-idName (UnsafeId _i) = undefined
+idName (UnsafeMkId _i) = undefined

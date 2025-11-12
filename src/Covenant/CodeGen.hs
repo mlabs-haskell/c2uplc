@@ -2,17 +2,16 @@ module Covenant.CodeGen (generatePLC) where
 
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
-    Arg (UnArg),
     CompNodeInfo (Builtin1, Builtin2, Builtin3, Builtin6, Force, Lam),
     Id,
     Ref (AnArg, AnId),
     ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
  )
-import Covenant.Constant (AConstant)
+import Covenant.Constant (AConstant (ABoolean, AByteString, AString, AUnit, AnInteger))
 import Covenant.Data (DatatypeInfo)
+import Covenant.Test (Arg (UnsafeMkArg))
 import Covenant.Type (
     AbstractTy,
-    CompT,
     Constructor,
     ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
@@ -61,9 +60,12 @@ import Covenant.MockPlutus (
     mapData,
     pApp,
     pBuiltin,
+    pCase,
     pConstr,
     pDataList,
+    pDelay,
     pError,
+    pForce,
     pLam,
     pVar,
     plutus_ConstrData,
@@ -73,6 +75,7 @@ import Covenant.MockPlutus (
 import Covenant.ArgDict (idToName)
 
 import PlutusCore (Name)
+import PlutusCore.MkPlc (mkConstant)
 
 data CodeGenError
     = NoASG
@@ -159,27 +162,38 @@ nodeToTerm ::
     ASGNode ->
     CodeGenM PlutusTerm
 nodeToTerm i argDict = \case
-    ACompNode compTy compNodeInfo -> case compNodeInfo of
+    ACompNode _compTy compNodeInfo -> case compNodeInfo of
         Builtin1 bi1 -> pure $ pBuiltin (SomeBuiltin1 bi1)
         Builtin2 bi2 -> pure $ pBuiltin (SomeBuiltin2 bi2)
         Builtin3 bi3 -> pure $ pBuiltin (SomeBuiltin3 bi3)
         Builtin6 bi6 -> pure $ pBuiltin (SomeBuiltin6 bi6)
-        Force r -> forceToTerm r
-        Lam r -> lamToTerm compTy r
+        Force r -> forceToTerm i argDict r
+        Lam r -> lamToTerm argDict i r
     AValNode _valT valNodeInfo -> case valNodeInfo of
         Lit aConstant -> litToTerm aConstant
-        App i' args _ -> do
+        App i' args _ _ -> do
             fTerm <- lookupTerm i'
             resolvedArgs <- traverse (refToTerm i' argDict) args
             pure $ foldl' pApp fTerm resolvedArgs
         Thunk i' -> thunkToTerm i'
         Cata alg val -> cataToTerm alg val
         DataConstructor tn cn fields -> dataConToTerm i argDict tn cn fields
-        Match scrut handlers -> matchToTerm scrut handlers
+        Match scrut handlers -> matchToTerm i argDict scrut handlers
     AnError -> pure pError
 
-matchToTerm :: Ref -> Vector Ref -> CodeGenM PlutusTerm
-matchToTerm = undefined
+matchToTerm :: Id -> Map Id (Either (Vector Name) (Vector Id)) -> Ref -> Vector Ref -> CodeGenM PlutusTerm
+matchToTerm matchNodeId argDict scrutinee handlers =
+    getEncodingRef scrutinee >>= \case
+        SOP -> do
+            scrutTerm <- refToTerm matchNodeId argDict scrutinee
+            handlersTerms <- traverse (refToTerm matchNodeId argDict) handlers
+            pure $ pCase scrutTerm handlersTerms
+        _ -> error "TODO: Implement"
+  where
+    -- NOTE: I don't think "matching on opaques" makes any sense, and if the scrutinee isn't a datatype,
+    --       then this should fail. I'll add proper errors later
+    getEncodingRef :: Ref -> CodeGenM DataEncoding
+    getEncodingRef = error "TODO This is tedious, come back to it later"
 
 dataConToTerm ::
     Id -> -- the ID of *this* node
@@ -234,16 +248,35 @@ cataToTerm :: Ref -> Ref -> CodeGenM PlutusTerm
 cataToTerm = undefined
 
 thunkToTerm :: Id -> CodeGenM PlutusTerm
-thunkToTerm = undefined
+thunkToTerm = pure . pDelay . idToVar
 
 litToTerm :: AConstant -> CodeGenM PlutusTerm
-litToTerm = undefined
+litToTerm = \case
+    AUnit -> pure $ mkConstant () ()
+    ABoolean b -> pure $ mkConstant () b
+    AnInteger i -> pure $ mkConstant () i
+    AByteString bs -> pure $ mkConstant () bs
+    AString txt -> pure $ mkConstant () txt
 
-lamToTerm :: CompT AbstractTy -> Ref -> CodeGenM PlutusTerm
-lamToTerm = undefined
+lamToTerm ::
+    Map Id (Either (Vector Name) (Vector Id)) -> -- our argument resolution dictionary, tho here we're using it "the other way around"
+    Id -> -- the Id of the lambda node
+    Ref -> -- body
+    CodeGenM PlutusTerm
+lamToTerm argDict lamNodeId bodyRef = case M.lookup lamNodeId argDict of
+    Just (Left names) -> do
+        -- I thiiiink?
+        let f = foldl' (\g argN -> g . pLam argN) id names
+        resolvedBody <- refToTerm lamNodeId argDict bodyRef
+        pure $ f resolvedBody
+    _anythingElse -> error "BOOOOOOOOOOM TODO: Better errors"
 
-forceToTerm :: Ref -> CodeGenM PlutusTerm
-forceToTerm = undefined
+forceToTerm ::
+    Id -> -- id of the parent node
+    Map Id (Either (Vector Name) (Vector Id)) -> -- arg resolution dict
+    Ref -> -- the thing we're forcing
+    CodeGenM PlutusTerm
+forceToTerm parentId argDict = fmap pForce . refToTerm parentId argDict
 
 idToVar :: Id -> PlutusTerm
 idToVar = pVar . idToName
@@ -255,7 +288,7 @@ refToTerm ::
     CodeGenM PlutusTerm
 refToTerm parentId argDict = \case
     AnId i -> pure $ idToVar i
-    AnArg (UnArg db ix) -> do
+    AnArg (UnsafeMkArg db ix _) -> do
         let dbInt = review asInt db
             ixInt = review intIndex ix
         case M.lookup parentId argDict of
@@ -289,7 +322,7 @@ countOccurs i = foldl' go 0
             _other -> n
         AValNode _valT valNodeInfo -> case valNodeInfo of
             Lit _aConstant -> n
-            App fn args _ -> n + countId fn + sum (countRef <$> args)
+            App fn args _ _ -> n + countId fn + sum (countRef <$> args)
             Thunk i' -> n + countId i'
             Cata alg val -> n + countRef alg + countRef val
             DataConstructor _tn _cn fields -> n + sum (countRef <$> fields)

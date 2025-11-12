@@ -10,8 +10,8 @@ package c2uplc
 source-repository-package
   type: git
   location: https://github.com/mlabs-haskell/covenant
-  tag: ec9d40e14c68075cc196ef5524ec81f8a27b79f5
-  sha256: 0nlm4i554h4h8x112hrjfayijca6ls5hzbiaqk9a51whmw3h79v0
+  tag: 819f5eeafef1ef608aa14c262587367e32f99d37
+  sha256: 1wwd1wpry177dlzrf2rlnv3bhnxa3isixmwb9c804f953jx7vjlh
 
 -- Note (Koz, 15/08/2025): For the next person who needs to bump Plutus
 -- dependencies, this is the order of operations:
