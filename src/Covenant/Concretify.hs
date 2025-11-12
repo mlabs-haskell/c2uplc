@@ -126,7 +126,10 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
                 -- need to call the top level function a bunch of times. Whatever, optimize it later.
                 Nothing ->
                     let parentVersions = S.toList $ getTyVarConcretifications asg callChains callSites callSiteChains parent
-                     in (Vector.! 0) <$> parentVersions
+                     in -- REVIEW: Is this right? Shouldn't we have to index into a particular position?
+                        --         But what position? The order is determined its place in the set we produce with
+                        --         `collectRigids`. Hm. Not sure what to do here. Any ideas @Koz?
+                        (Vector.! 0) <$> parentVersions
                 -- If the applied type is concrete in the parent, we need to determine what the tyvar we care about actually
                 -- got instantiated to. There isn't a *trivial* way to do that, however, fortunately we know enough to determine this:
                 -- The instantiation we're looking for will always be of the form `BoundAt Z argPos`
