@@ -66,6 +66,7 @@ common lang
     , nonempty-vector
     , optics-core
     , optics-extra
+    , smash
     , text
     , transformers
     , vector
