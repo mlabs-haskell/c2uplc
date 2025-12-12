@@ -1,16 +1,7 @@
 {- HLINT ignore "Use if" -}
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns, OverloadedLists, OverloadedStrings #-}
 
-module Covenant.Concretify (
-    getTyVarConcretifications,
-    getAllNodes,
-    getCallSiteChainMap,
-    getCallChain,
-    getLambdaSubASG,
-    tyInstDeps,
-    getCallSites,
-    allLambdas,
-) where
+module Covenant.Concretify where
 
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -20,7 +11,7 @@ import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (ask, local)
+import Control.Monad.RWS.Strict (ask, local, RWS, modify, execRWS)
 
 import Covenant.ASG (
     ASG,
@@ -29,20 +20,36 @@ import Covenant.ASG (
     Id,
     Ref (AnArg, AnId),
     ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
+    nodeAt, topLevelId,
  )
-import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult, ReturnT), ValT (Abstraction, BuiltinFlat, Datatype, ThunkT))
+import Covenant.Type (AbstractTy (BoundAt),
+                      CompT (CompN, Comp0),
+                      CompTBody (ArgsAndResult, ReturnT, (:--:>)),
+                      ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
+                      DataDeclaration (DataDeclaration, OpaqueData),
+                      DataEncoding (SOP, PlutusData, BuiltinStrategy),
+                      Constructor (Constructor),
+                      tyvar, TyName, ConstructorName (ConstructorName), PlutusDataStrategy (EnumData, ProductListData, ConstrData, NewtypeData))
 
 import Control.Applicative (Alternative ((<|>)))
 import Control.Monad.Reader (Reader, runReader)
-import Covenant.DeBruijn (DeBruijn (Z), asInt)
-import Covenant.Index (Count, Index)
-import Data.Foldable (foldl')
+import Covenant.DeBruijn (DeBruijn (Z, S), asInt)
+import Covenant.Index (Count, Index, intIndex, intCount, wordCount, count2, ix0, ix1)
+import Data.Foldable (foldl', traverse_)
 import Data.Kind (Type)
 import Data.Maybe (fromJust, mapMaybe)
 import Data.Void (Void, vacuous)
 import Data.Wedge (Wedge (Here, Nowhere, There))
-import Optics.Core (preview, review)
+import Optics.Core (preview, review, view)
+import Debug.Trace
+import Data.Foldable (find)
+import Control.Monad.State.Strict (StateT, MonadState (get))
+import Covenant.Data (DatatypeInfo)
+import Covenant.MockPlutus (PlutusTerm, pLam, pVar, pApp, plutus_I, listData, constrData)
+import Data.Text (Text)
+import Covenant.Test (Id(UnsafeMkId))
+import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import qualified Data.Text as T
 
 newtype LambdaId = LambdaId {_getLamId :: Id}
     deriving newtype (Show, Eq, Ord)
@@ -50,6 +57,297 @@ newtype LambdaId = LambdaId {_getLamId :: Id}
 newtype AppId = AppId {_getAppId :: Id}
     deriving newtype (Show, Eq, Ord)
 
+data TyFixerId
+  =  AMatchId Id
+  | AnAppId Id
+  | ACataId Id
+  | AConstrId Id
+  deriving stock (Show, Eq, Ord)
+
+-- "expands" a lambda to have additional arguments for wrappers/unwrappers.
+
+sop2Tuple :: DataDeclaration AbstractTy
+sop2Tuple = DataDeclaration "Tuple2" count2 [Constructor "Tuple2" [tyvar Z ix0, tyvar Z ix1]] SOP
+
+{- This records the information we need for our "mock" functions for catamorphisms/datatype intro/datatype elimination
+
+   Specifically, it contains:
+     1. The type name. For catas and matches, this is the type of the "scrutinee" being matched on, for intros it is the result
+     2. The encoding. This will be useful later on.
+     3. The FULLY POLYMORPHIC type of the function
+     4. A PLC term corresponding to the function
+     5. A token indicating which "sort" of function it is (cata/match/intro). This will also contain the "true"
+        function type, which takes additional wrapper/unwrapper arguments IF THE TYPE IS DATA ENCODED.
+        This is the type of the PLC term, but we "lie" about it when we replace the match/cata/intro with an app so as to use the existing machinery.
+     6. The name of the function.
+
+     Some explanation for 4: For example, if we have a data encoded Maybe type, the "false" types would be:
+       match_Maybe :: forall a r. Maybe a -> r -> (a -> r) -> r
+       Just :: forall a. a -> Maybe a
+       Nothing :: forall a. Maybe a
+       (.. maybe doesn't have a catamorphism form ...)
+
+     But the "true" types w/ the handler arguments are:
+       match_Maybe :: forall a r. Maybe a -> r -> (a -> r) -> (a -> a) -> r
+       Just :: forall a. Maybe a -> (a -> a) -> a
+       Nothing :: forall a. Maybe a
+
+     In `match_Maybe` the extra argument will be either an identity function if the type is not a representationally amorphous
+     primitive, or an unwrapper like `unI` or `unB` if the parameter is a representationally amorphous primitive.
+
+     In the constructor forms (or at least the ones for non-nullary constructors), the extra arg will be an `I` or `B` wrapper.
+-}
+data MagicFunction
+  = MagicFunction {
+      mfTyName :: TyName,
+      mfEncoding :: DataEncoding,
+      mfPolyType :: CompT AbstractTy,
+      mfCompiled :: PlutusTerm,
+      mfTypeSchema :: MagicTypeSchema,
+      mfFunName :: Text
+    }
+
+data MagicTypeSchema
+  = SOPSchema
+  -- The last arg is a "functionalized" map from type variables to the arg index of their "added as extra arguments" handlers
+  -- To be more specific, it's a map from type variables *to the argument position of the ~~TERM~~, i.e. lambda arg, that
+  -- handles them.
+  -- We probably need this for all of the below "actually-an-application" things but I'm not 100% certain
+  -- Quite possible we just need SOPSchema / DataSchema and that these variants are all redunant, keeping for now in case
+  -- something requires special handling that I don't yet see 
+  | MatchDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
+  | CataDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
+  | IntroDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
+
+
+
+nextId :: RWS (Map TyName (DatatypeInfo AbstractTy)) () Id Id
+nextId = do
+  UnsafeMkId s <- get
+  let new = UnsafeMkId (s + 1)
+  modify $ \_ -> new
+  pure new
+
+mkConstructorFunctions :: TyName -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id  (Map Id MagicFunction)
+mkConstructorFunctions tn = do
+  dtDict <- ask
+  case M.lookup tn dtDict of
+    Nothing -> error "Used a datatype we don't have declarations for. Should not be possible at this stage."
+    Just dtInfo -> case view #originalDecl dtInfo of
+      DataDeclaration tn cnt ctors enc -> do
+        Vector.ifoldM (go dtInfo cnt enc) M.empty ctors
+      OpaqueData{} -> undefined
+ where
+   go :: DatatypeInfo AbstractTy
+      -> Count "tyvar"
+      -> DataEncoding
+      -> Map Id MagicFunction
+      -> Int
+      -> Constructor AbstractTy
+      -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id (Map Id MagicFunction)
+   go dtInfo cnt enc acc cIx (Constructor (ConstructorName cName) argTys) = do
+     let ctorFnTy = mkCtorFnTy cnt argTys
+         schema   = mkSchema enc ctorFnTy
+         funName  =  cName
+     newId <- nextId
+     compiled <- genIntroFormPLC enc schema cIx
+     let here = MagicFunction {mfTyName = tn,
+                               mfEncoding = enc,
+                               mfPolyType = ctorFnTy,
+                               mfCompiled = compiled,
+                               mfTypeSchema = schema,
+                               mfFunName = funName
+                               }
+     pure $ M.insert newId here acc
+    where
+      genIntroFormTermVarName :: forall a. Int -> a -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id Name
+      genIntroFormTermVarName pos _ = do
+        uniqueId@(UnsafeMkId i) <- nextId
+        let textPart = cName <> "_arg" <> T.pack (show pos)
+            uniquePart = Unique (fromIntegral i)
+        pure $ Name textPart uniquePart
+
+      genIntroFormPLC :: DataEncoding
+                      -> MagicTypeSchema
+                      -> Int
+                      -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id  PlutusTerm
+      genIntroFormPLC dataEnc schema ctorIx = case schema of
+        -- TODO/FIXME: Need to handle 0 argument constructors / Enum encodings BEFORE we do all this work
+        -- REMINDER: DONT MIX UP TERM AND TYPE ARGS / CTOR ARGS VS FN ARGS
+        SOPSchema -> undefined
+        IntroDataSchema (CompN _ (ArgsAndResult introFnArgs _)) getHandlerIx -> do
+          -- these are the ARGUMENTS TO THE CONSTRUCTOR
+          let ctorArgs = argTys
+          -- These are the NAMES OF ALL THE ARGUMENT TO THE INTRO FUNCTION. In this branch
+          -- this will (almost always) contain MORE NAMES than the args to the constructor
+          names <- Vector.imapM genIntroFormTermVarName introFnArgs
+          -- The names of arguments to the ctors
+          let ctorArgNames = Vector.take (Vector.length ctorArgs) names
+              nameTyPairs = Vector.zip ctorArgNames ctorArgs
+              lamBuilder = foldl' (\g argN -> g . pLam argN) id names
+
+              resolveHandler :: ValT AbstractTy -> Maybe Name
+              resolveHandler = \case
+                Abstraction tv -> getHandlerIx tv >>= \hIx -> names Vector.!? hIx
+                _anythingElse -> Nothing
+
+              handledCtorArgs = flip fmap nameTyPairs $ \(cArgNm,cArgTy) -> case resolveHandler cArgTy of
+                Nothing -> pVar cArgNm
+                Just argHandler -> pApp (pVar argHandler) (pVar cArgNm)
+          case dataEnc of
+            -- TODO: Fill in some of the helpers (plutus_I, listData, etc) and make sure you use the "right version" here
+            SOP -> error "something went horribly wrong, IntroDataSchema w/ SOP encoding"
+            BuiltinStrategy _ -> error "TODO: Remember how to handle code generation for builtin strategies"
+            PlutusData strat -> case strat of
+              EnumData -> pure $ lamBuilder (plutus_I $ fromIntegral ctorIx)
+              ProductListData -> pure $ listData handledCtorArgs
+              ConstrData -> pure $ constrData (plutus_I $ fromIntegral ctorIx) (listData handledCtorArgs)
+              NewtypeData -> pure $ handledCtorArgs Vector.! 0
+        _anythingElse -> error "Schema for an introduction must be an IntroDataSchema or SOPSchema!"
+
+      mkCtorFnTy :: Count "tyvar" -> Vector (ValT AbstractTy) -> CompT AbstractTy
+      mkCtorFnTy datatypeNumParams args =
+        let result = Datatype tn (countToTyVars datatypeNumParams)
+        in CompN datatypeNumParams (ArgsAndResult args result)
+
+      mkSchema :: DataEncoding -> CompT AbstractTy -> MagicTypeSchema
+      mkSchema dataEnc (CompN tvCnt (ArgsAndResult args result)) = case dataEnc of
+        SOP -> SOPSchema
+        BuiltinStrategy _strat ->
+          error $ "TODO: Try to remember what we would need to do here. For this (but not the codegen), "
+               <> "it's probably fine to generate the same thing as for PlutusData"
+        PlutusData _strat ->
+          -- strategy doesn't matter HERE though it does for codegen
+          -- note that we *can't* have "external" rigids here
+
+          -- We only care about adding wrappers for types that occur as arguments.
+          -- And - extra nice for us - we can just ignore thunks becaaauusssee
+          -- this is data-encoded and they can't exist as params anyway. So we really just need to
+          -- look for any arg that is a tyvar
+          let getTyVar :: ValT AbstractTy -> Maybe AbstractTy
+              getTyVar = \case
+                Abstraction a  -> Just a
+                _ -> Nothing
+
+              -- We need to return *something* that indicates which extra handler arg is associated w/ a particular
+              -- tyvar. Not immediately sure what the best way to do this is.
+              usedTypeVariables :: [AbstractTy]
+              usedTypeVariables =  S.toList . S.fromList . mapMaybe getTyVar . Vector.toList  $ args
+
+              lenOrigArgs = Vector.length args
+
+              extraArgs' :: (Int,Map AbstractTy Int, Vector (ValT AbstractTy))
+              extraArgs' =
+                let mkHandler (BoundAt db indx) = let tv = tyvar (S db) indx
+                                                  in ThunkT (Comp0 $ tv :--:> ReturnT tv)
+                in foldl' (\(pos,handlerDict,eArgs) tv ->
+                               let newHandlerDict = M.insert tv (pos + lenOrigArgs) handlerDict
+                                   newPos = pos + 1
+                                   handler = mkHandler tv
+                                   newEArgs = Vector.snoc eArgs handler
+                               in (newPos,newHandlerDict,newEArgs)
+                             ) (0,M.empty,Vector.empty) usedTypeVariables
+
+              (_,hDict,extraArgs) = extraArgs'
+
+              polyFnTy :: CompT AbstractTy
+              polyFnTy = CompN tvCnt $ ArgsAndResult (args <> extraArgs) result
+          in IntroDataSchema polyFnTy (`M.lookup` hDict)
+
+
+transformMatchNode :: Id -> ValT AbstractTy -> Ref -> Vector Ref -> ()
+transformMatchNode = undefined
+
+
+-- Constructs all the intermediate resources and then determines the full range of concretifications for every lambda/call site in the ASG
+tyVarConcretifications :: ASG -> Map LambdaId (Map AppId (Set (Map AbstractTy (ValT Void))))
+tyVarConcretifications asg = trace msg $ M.fromSet (snd . getTyVarConcretifications asg asgCallChains asgCallSites asgCallSiteChains) <$> asgCallSites
+  where
+    msg = "asgLambdas:\n  " <> show asgLambdas
+          <> "\n\nasgCallSites:\n  " <> show asgCallSites
+          <> "\n\nasgCallChains:\n  " <> show asgCallChains
+          <> "\n\nasgCallSiteChains:\n  " <> show asgCallSiteChains
+          <> "\n\n"
+    asgLambdas = allLambdas asg i
+
+    asgCallSites = getCallSites asgLambdas asg i
+
+    asgCallChains = getCallChain asg i
+
+    asgCallSiteChains = runReader (getCallSiteChainMap asg i asgCallSites) mempty
+
+    i = topLevelId asg
+
+immediateConcretifications :: ASG -> Map LambdaId (Map AppId (Set (Map (Index "tyvar") (ValT Void))))
+immediateConcretifications asg = M.fromSet ( getImmediateConcretifications  asg asgCallSites) (S.map LambdaId asgLambdas)
+  where
+    asgLambdas = allLambdas asg i
+
+    asgCallSites = getCallSites asgLambdas asg i
+
+    i = topLevelId asg
+
+{- This returns the set of "immediate" concretifications, i.e., the set of instantiations of a polymorphic function
+
+   For example, in:
+
+  ```
+   f :: Int -> Bool -> Int
+   f i b =
+    let g :: forall a. a -> Int
+        g _ = 2
+
+    in g i == g b
+  ```
+
+  The function `g` is applied twice, and the type variable is instantiated to two different concrete types
+  in that application. However, it is never instantiated *to a rigid*, so the (much more complex) rigid
+  concretification machinery will not pick up on it.
+
+-}
+getImmediateConcretifications ::
+  ASG ->
+  Map LambdaId (Set AppId) ->
+  LambdaId ->
+  Map AppId (Set (Map (Index "tyvar") (ValT Void)))
+getImmediateConcretifications asg callSites lamId@(LambdaId i) = case M.lookup lamId callSites of
+  Nothing -> M.empty
+  Just lamCallSites -> M.unionsWith (<>) $ go <$> S.toList lamCallSites
+ where
+   lamPolyTy :: CompT AbstractTy
+   lamPolyTy = case nodeAt i asg of
+     ACompNode compT _ -> compT
+     _ -> error "LambdaId doesn't point at a comp node"
+
+   floppyTyVars :: [Index "tyvar"]
+   floppyTyVars = case lamPolyTy of
+     CompN cnt _ -> let cntInt = review intCount cnt
+                    in if cntInt <= 0
+                       then []
+                       else (fromJust . preview intIndex) <$> [0..(cntInt - 1)]
+
+   go :: AppId -> Map AppId (Set (Map (Index "tyvar") (ValT Void)))
+   go aId@(AppId appId) = M.singleton aId . S.singleton $ foldr (\x acc -> case concretifies asg x aId of
+                                    Nowhere -> M.empty
+                                    -- This means it's a rigid (I THINK) and will be handled by the
+                                    -- below machinery
+                                    There _ -> M.empty
+                                    Here concrete -> M.singleton x concrete
+                                ) M.empty floppyTyVars
+
+getTyVarConcretificationsv2 ::
+  ASG ->
+  Map LambdaId (Set LambdaId) -> -- call chains
+  Map LambdaId (Set TyFixerId) ->  -- type fixing sites
+  Map TyFixerId (Vector LambdaId) -> -- type fixer site chains
+  TyFixerId -> -- The ID of the Node we care about. Must be a type fixer, so an app/match/cata/intro
+  -- The first element of the tuple is the "fully polymorphic type of the type fixer".
+  -- We need this, unfortunately. It has to be threaded through recursive calls to the this
+  -- function in order to determine what, exactly, the concretifications are for a given
+  -- rigid type variable. Without it, the best we can do is to know that the tyvars DO concretify, but we
+  -- can't say what it is they concretify TO.
+  (CompT AbstractTy, Set (Map AbstractTy (ValT Void)))
+getTyVarConcretificationsv2 asg callChains fixerSites fixerId = undefined
 {- This gives us every possible concretification of a rigid tyvar for a given App site.
 
    NOTE: This ONLY tells us about rigid instantiations. This is important to keep in mind,
@@ -90,29 +388,12 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
                 --              an entry for every rigid".
                 resolvedRigids = resolveRigid <$> S.toList rigids
              in -- REVIEW: We need to tag the results with `fnTy` for recursive calls. I think? ugh
-                (fnTy,) . S.fromList . combine $ resolvedRigids
+                trace (show resolvedRigids) $ (fnTy,) . S.fromList . combine $ resolvedRigids
         Just _ ->
             -- This has to be empty. If the application site is fully concretified, there are no rigids, and there's nothing we can do.
             (fnTy, S.empty)
     _ -> error "AppId not an app! BOOOOOM!"
   where
-    -- "unsafe" way to retrieve the original (i.e. possibly polymorphic) lambda type
-    lambdaTy :: LambdaId -> CompT AbstractTy
-    lambdaTy (LambdaId l) = case nodeAt l asg of
-        ACompNode compT _ -> compT
-        _other -> error "Lambda id points at non-comp-node"
-
-    -- There has to be a term for what this does (can't remember it), but the general idea is given by the example:
-    -- `combine [["a","b"],["c"],["d","e"]]` ~ `["acd","ace","bcd","bce"]`
-    combine :: forall (a :: Type). (Monoid a) => [[a]] -> [a]
-    combine [] = []
-    combine (xs : xss) = go xs xss
-      where
-        go :: [a] -> [[a]] -> [a]
-        go as [] = as
-        go as (ys : yss) =
-            let as' = (<>) <$> as <*> ys
-             in go as' yss
     -- This really collects every *type variable* in a CompT, but at this point, the only ones left really should be rigid.
     collectRigids :: CompT AbstractTy -> Set AbstractTy
     collectRigids =
@@ -130,36 +411,10 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
             BuiltinFlat{} -> pure S.empty
             Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
 
-    -- Checks whether a "was rigid" (identified by the Index) is instantiated at a given call site of the lambda
-    -- which binds it, and if so, sorts the resulting type that instantiates it into concrete or abstract.
-    concretifies ::
-        Index "tyvar" -> -- The arg index of the rigid. We know the DeBruijn must be Z
-        AppId -> -- AppId of *a* call site of a "parent" lambda that binds the rigid we're examining
-        -- We either get:
-        --   1. Nothing (which indicates an internal error or something weird with a phantom type variable
-        --      (REVIEW: Do we sufficiently 'check' for phantom tyvars before this? The requirements here
-        --               may differ from our previous ones. A phantom tyvar is fine if it's never *used*
-        --               anywhere, but things could get really broken if we don't forbid their use
-        --               ***in explicit type applications that would result in them being a ridid***.
-        --      )
-        --   2. An rigid type variable, which means we have more work to do.
-        --   3. A concrete type, which is what we want.
-        Wedge (ValT Void) (ValT AbstractTy)
-    concretifies argPos (AppId pcsId) = case nodeAt pcsId asg of
-        AValNode _ (App fn _args _instArgs monoFunTy) ->
-            let polyFunTy = lambdaTy (LambdaId fn)
-                var = BoundAt Z argPos
-             in case instantiationHelper id var monoFunTy polyFunTy of
-                    Nothing -> Nowhere
-                    Just ty -> case decideConcrete ty of
-                        Nothing -> There ty
-                        Just ty' -> Here ty'
-        _ -> error "App node does not point at an App ValNode!!!"
-
     -- This returns EVERY POSSIBLE INSTANTIATION FOR A GIVEN ARGPOS. Or it should anyway!
     -- NOTE: That means that this is "every possibility for a specific tyvar".
     resolveRigid :: AbstractTy -> [Map AbstractTy (ValT Void)]
-    resolveRigid rigid@(BoundAt db argPos) = concatMap resolveHelper parentCallSites
+    resolveRigid rigid@(BoundAt db argPos) =  concatMap resolveHelper parentCallSites
       where
         -- 1. We need to find the ID of the lambda that corresponds to the DeBruijn index
         --    of our rigid (i.e. the lambda which binds that rigid)
@@ -167,15 +422,21 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
         --    call chain map for our AppId key using the DeBruijn. I think?
         --    NOTE: I'm doing unsafe indexing for convenience and to simply things, we might want to
         --          switch to safe indexing later w/ real errors
+        -- FIXME/REVIEW: Is the logic right here? I think it might not be....
         parentLambdaId :: LambdaId
-        parentLambdaId = (callSiteChains M.! appId) Vector.! review asInt db
+        parentLambdaId = case db of
+          -- N.B. our call site chain map only ever has one entry, and that's super annoying to fix
+          -- so we're just gonna roll w/ it for now
+          Z -> (callSiteChains M.! appId) Vector.! 0
+          (S x) -> let firstParent = (callSiteChains M.! appId) Vector.! 0
+               in chaseRigid firstParent x callChains
         -- 2. Then we need to collect all of the call sites for that lambda. I think?
         parentCallSites :: Set AppId
         parentCallSites = callSites M.! parentLambdaId
 
         -- 3. This is where it get complicated.
         resolveHelper :: AppId -> [Map AbstractTy (ValT Void)]
-        resolveHelper parentAppId = case concretifies argPos parentAppId of
+        resolveHelper parentAppId = case concretifies asg argPos parentAppId of
             -- This happens when we can't determine the instantiation of a rigid at an application of the lambda that binds it.
             -- We can't meaningfully recover - it means that we *need* a rigid (because it appears in the signature of a function)
             -- but the rigid does not appear as a bound tyvar in the (applied/instantiated) function signature at a call site of its binding lambda.
@@ -192,7 +453,7 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
                 let
                     -- The original polymorphic function type of the lambda that binds the rigid we care about
                     parentPolyFunTy :: CompT AbstractTy
-                    parentPolyFunTy = lambdaTy parentLambdaId
+                    parentPolyFunTy = lambdaTy asg parentLambdaId
                     -- Every transitive concretifiction of this parent lambda (the recursive call to our top level function)
                     parentAbsFnTy :: CompT AbstractTy
                     parentConcretifications :: [Map AbstractTy (ValT Void)]
@@ -323,12 +584,12 @@ getLambdaSubASG asg i = case nodeAt i asg of
         -- but that shouldn't affect correctness and I can fix the performance later
         App fn args _ _ ->
             let fnAsg = getLambdaSubASG asg fn
-                args' = Vector.foldMap goRef args
+                args' = vFoldMap goRef args
              in fnAsg <> args'
         Thunk child -> getLambdaSubASG asg child -- I think?
         Cata alg arg -> goRef alg <> goRef arg
-        DataConstructor _tn _cn args -> Vector.foldMap goRef args
-        Match scrut handlers -> goRef scrut <> Vector.foldMap goRef handlers
+        DataConstructor _tn _cn args -> vFoldMap goRef args
+        Match scrut handlers -> goRef scrut <> vFoldMap goRef handlers
   where
     goRef :: Ref -> Map LambdaId (Map Id ASGNode)
     goRef = \case
@@ -357,7 +618,9 @@ getAllNodes asg i = case thisNode of
         AnArg{} -> M.empty
         AnId ix -> getAllNodes asg ix
 
-getCallSiteChainMap :: ASG -> Id -> Map LambdaId (Set AppId) -> Reader (Vector LambdaId) (Map AppId (Vector LambdaId))
+getCallSiteChainMap :: ASG
+                    -> Id
+                    -> Map LambdaId (Set AppId) -> Reader (Vector LambdaId) (Map AppId (Vector LambdaId))
 getCallSiteChainMap asg i callsites = case nodeAt i asg of
     AnError -> pure M.empty
     ACompNode _compT compNode -> case compNode of
@@ -371,18 +634,18 @@ getCallSiteChainMap asg i callsites = case nodeAt i asg of
         App fn args _ _ -> case M.lookup (LambdaId fn) callsites of
             Nothing -> do
                 fnPart <- getCallSiteChainMap asg fn callsites
-                argsPart <- Vector.foldMap id <$> traverse goRef args
+                argsPart <- vFoldMap id <$> traverse goRef args
                 pure $ fnPart <> argsPart
             Just{} -> do
                 cxt <- ask
                 M.insert (AppId i) cxt <$> do
                     fnPart <- getCallSiteChainMap asg fn callsites
-                    argsPart <- Vector.foldMap id <$> traverse goRef args
+                    argsPart <- vFoldMap id <$> traverse goRef args
                     pure $ fnPart <> argsPart
         Thunk child -> getCallSiteChainMap asg child callsites
-        DataConstructor _ _ args -> Vector.foldMap id <$> traverse goRef args
-        Match scrut handlers -> Vector.foldMap id <$> traverse goRef (scrut `Vector.cons` handlers)
-        Cata alg arg -> Vector.foldMap id <$> traverse goRef (Vector.fromList [alg, arg])
+        DataConstructor _ _ args -> vFoldMap id <$> traverse goRef args
+        Match scrut handlers -> vFoldMap id <$> traverse goRef (scrut `Vector.cons` handlers)
+        Cata alg arg -> vFoldMap id <$> traverse goRef (Vector.fromList [alg, arg])
   where
     goRef = \case
         AnArg{} -> pure M.empty
@@ -391,6 +654,9 @@ getCallSiteChainMap asg i callsites = case nodeAt i asg of
 {- NOTE: I can probably rewrite this as a single traversal/fold after I know it works. Still kind of sick and
          doing it this way seemed likely to reduce the possibility for mistakes.
 -}
+
+-- The Set IS NOT AN ORDERED LIST OF HIERARCHICAL CALLSITES, it is instead an exhaustive set of possibile concretifications of the key lambda
+-- in every "upwards" call site that might concretify a tyvar differently
 getCallChain :: ASG -> Id -> Map LambdaId (Set LambdaId) -- it should be a NonEmpty but I just want to get the logic right for now
 getCallChain asg i = foldl' go M.empty raw
   where
@@ -415,7 +681,10 @@ getCallChain' asg i = case nodeAt i asg of
         Lam bRef -> do
             parent <- ask
             let here = (parent, LambdaId i)
-            S.insert here <$> local (\_ -> LambdaId i) (goRef bRef)
+            rest <- local (\_ -> LambdaId i) (goRef bRef)
+            if i == topLevelId asg
+              then pure rest
+              else pure $ S.insert here rest
         Force fRef -> goRef fRef
         _ -> pure S.empty
     AValNode _valT valNode -> case valNode of
@@ -436,6 +705,18 @@ getCallChain' asg i = case nodeAt i asg of
         AnArg{} -> pure S.empty
         AnId ix -> getCallChain' asg ix
 
+chaseRigid :: LambdaId -- the starting point. if the DB is Z we will just return this
+           -> DeBruijn
+           -> Map LambdaId (Set LambdaId)
+           -> LambdaId
+chaseRigid lamStart Z _ = lamStart
+chaseRigid lamStart db@(S x) callChains =
+  let unmapped = M.toList callChains
+  in case find (\v -> lamStart `S.member` snd v) unmapped of
+    Just (next,_) -> chaseRigid next x callChains
+    Nothing -> error "Ran out of chains indices in chaseRigid before we reached our goal"
+
+
 tyInstDeps :: ASG -> Id -> Reader (Vector Id) (Map Id (Map Id (Vector Id)))
 tyInstDeps asg i = case nodeAt i asg of
     AnError -> pure M.empty
@@ -451,7 +732,7 @@ tyInstDeps asg i = case nodeAt i asg of
             let here = M.singleton fn (M.singleton i cxt)
             fnPart <- tyInstDeps asg fn
             argsParts <- M.unionsWith goMerge <$> traverse goRef (Vector.toList args)
-            pure $ M.unionsWith goMerge [here, fnPart, argsParts]
+            pure $ M.unionsWith goMerge ([here, fnPart, argsParts] :: [(Map Id (Map Id (Vector Id)))])
         Thunk child -> tyInstDeps asg child
         Cata alg arg -> M.unionWith goMerge <$> goRef alg <*> goRef arg
         DataConstructor _tn _cn args -> M.unionsWith goMerge <$> (traverse goRef . Vector.toList $ args)
@@ -472,6 +753,7 @@ tyInstDeps asg i = case nodeAt i asg of
     goMerge = (<>)
 
 -- The Set Id in the return type is the set of all call sites of the lambda that is that key of that map entry
+-- I.e.
 getCallSites :: Set Id -> ASG -> Id -> Map LambdaId (Set AppId)
 getCallSites lambdas asg i = case nodeAt i asg of
     AnError -> M.empty
@@ -482,12 +764,12 @@ getCallSites lambdas asg i = case nodeAt i asg of
     AValNode _valT valNode -> case valNode of
         Lit _ -> M.empty
         App fn args _ _ -> case S.member fn lambdas of
-            False -> M.unionWith (<>) (getCallSites lambdas asg fn) (Vector.foldMap goRef args)
+            False -> M.unionWith (<>) (getCallSites lambdas asg fn) (vFoldMap goRef args)
             True ->
                 let here = M.singleton (LambdaId fn) (S.singleton $ AppId i)
                     fromFn = getCallSites lambdas asg fn
                     fromArgs = M.unionsWith (<>) . map goRef . Vector.toList $ args
-                 in M.unionsWith (<>) [here, fromFn, fromArgs]
+                 in M.unionsWith (<>) ([here, fromFn, fromArgs] :: [(Map LambdaId (Set AppId))])
         Thunk child -> getCallSites lambdas asg child
         Cata alg arg -> M.unionWith (<>) (goRef alg) (goRef arg)
         DataConstructor _tn _cn args -> M.unionsWith (<>) (goRef <$> args)
@@ -497,6 +779,53 @@ getCallSites lambdas asg i = case nodeAt i asg of
     goRef = \case
         AnId child -> getCallSites lambdas asg child
         AnArg _ -> M.empty
+
+getTypeFixerChains' :: ASG -> Id -> Map TyFixerId (Set (Vector LambdaId))
+getTypeFixerChains' asg i = fst $  execRWS (getTypeFixerChains asg i) mempty mempty
+
+getTypeFixerChains :: ASG -> Id -> RWS (Vector LambdaId) () (Map TyFixerId (Set (Vector LambdaId))) ()
+getTypeFixerChains asg i = case nodeAt i asg of
+  AnError -> pure ()
+  ACompNode compT compNode -> case compNode of
+    Lam bodyRef -> local (Vector.cons (LambdaId i)) $ goRef bodyRef
+    Force fRef -> goRef fRef
+    _aBuiltin -> pure ()
+  AValNode valT valNode -> case valNode of
+    Lit _ -> pure ()
+    Thunk thunkId -> getTypeFixerChains asg thunkId
+    App fn args _ _ -> do
+      logTyFixer AnAppId i
+      getTypeFixerChains asg fn
+      traverse_ goRef args
+    Match scrut handlers -> do
+      logTyFixer AMatchId i
+      goRef scrut
+      traverse_ goRef handlers
+    Cata alg arg -> do
+      logTyFixer ACataId i
+      goRef alg
+      goRef arg
+    DataConstructor _tn _cn args -> do
+      logTyFixer AConstrId i
+      traverse_ goRef args
+ where
+   goRef = \case
+     AnId child -> getTypeFixerChains asg child
+     AnArg _ -> pure ()
+
+   logTyFixer :: (Id -> TyFixerId) -> Id -> RWS (Vector LambdaId) () (Map TyFixerId (Set (Vector LambdaId))) ()
+   logTyFixer tyFixerKind tfId = do
+     currentStack <- ask
+     modify (M.alter (\case
+               Nothing -> Just $ S.singleton currentStack
+               Just knownPaths -> if currentStack `S.member` knownPaths
+                                  then Just knownPaths
+                                  else Just $ S.insert currentStack knownPaths
+                ) (tyFixerKind tfId) )
+
+
+
+
 
 allLambdas :: ASG -> Id -> Set Id
 allLambdas asg i = case nodeAt i asg of
@@ -512,7 +841,7 @@ allLambdas asg i = case nodeAt i asg of
                 argsPart = Vector.foldMap goRef args
              in fnPart <> argsPart
         Thunk child -> allLambdas asg child
-        Cata alg arg -> foldMap goRef [alg, arg]
+        Cata alg arg -> foldMap goRef ([alg, arg] :: [Ref])
         DataConstructor _tn _cn args -> Vector.foldMap goRef args
         Match scrut handlers -> goRef scrut <> Vector.foldMap goRef handlers
   where
@@ -522,6 +851,10 @@ allLambdas asg i = case nodeAt i asg of
         AnArg _ -> mempty
 
 -- helpers
+
+-- Vector.foldMap uses the wrong monoid instance for `Map` so we need to always use this instead.
+vFoldMap :: forall (a :: Type) (k :: Type) (v :: Type). (Ord k, Monoid v) => (a -> Map k v) -> Vector a -> Map k v
+vFoldMap f  = Vector.foldl' (\acc x -> M.unionWith (<>) acc (f x)) mempty
 
 -- this is really fucking stupid but I don't have the time to do something better
 compTBodyToVec :: forall a. CompTBody a -> Vector (ValT a)
@@ -535,10 +868,10 @@ vecToCompTBody vec = case Vector.unsnoc vec of
     Nothing -> error "empty CompT"
 
 compN :: Count "tyvar" -> CompTBody a -> CompT a
-compN = error "Placeholder, we need to fix the pattern synonyms in the covenant repo b/c we can't construct a non-AbstractTy CompT -_-"
+compN = CompN
 
 compTBody :: CompT a -> CompTBody a
-compTBody = error "Placeholder, need a way to deconstruct a CompT that isn't a CompT AbstractTy"
+compTBody (CompN _ body) = body
 
 compTArgSchema :: CompT a -> Vector (ValT a)
 compTArgSchema t = case compTBody t of
@@ -572,3 +905,59 @@ substitute f dict = \case
         pure . ThunkT . CompN cnt $ vecToCompTBody subbedBody
     Datatype tn args -> Datatype tn <$> traverse (substitute f dict) args
     other -> pure other
+
+
+    -- "unsafe" way to retrieve the original (i.e. possibly polymorphic) lambda type
+lambdaTy :: ASG -> LambdaId -> CompT AbstractTy
+lambdaTy asg (LambdaId l) = case nodeAt l asg of
+        ACompNode compT _ -> compT
+        _other -> error "Lambda id points at non-comp-node"
+    -- Checks whether a "was rigid" (identified by the Index) is instantiated at a given call site of the lambda
+    -- which binds it, and if so, sorts the resulting type that instantiates it into concrete or abstract.
+concretifies ::
+        ASG ->
+        Index "tyvar" -> -- The arg index of the rigid. We know the DeBruijn must be Z
+        AppId -> -- AppId of *a* call site of a "parent" lambda that binds the rigid we're examining
+        -- We either get:
+        --   1. Nothing (which indicates an internal error or something weird with a phantom type variable
+        --      (REVIEW: Do we sufficiently 'check' for phantom tyvars before this? The requirements here
+        --               may differ from our previous ones. A phantom tyvar is fine if it's never *used*
+        --               anywhere, but things could get really broken if we don't forbid their use
+        --               ***in explicit type applications that would result in them being a ridid***.
+        --      )
+        --   2. An rigid type variable, which means we have more work to do.
+        --   3. A concrete type, which is what we want.
+        Wedge (ValT Void) (ValT AbstractTy)
+concretifies asg argPos (AppId pcsId) = case nodeAt pcsId asg of
+        AValNode _ (App fn _args _instArgs monoFunTy) ->
+            let polyFunTy = lambdaTy asg (LambdaId fn)
+                var = BoundAt Z argPos
+             in case instantiationHelper id var monoFunTy polyFunTy of
+                    Nothing -> Nowhere
+                    Just ty -> case decideConcrete ty of
+                        Nothing -> There ty
+                        Just ty' -> Here ty'
+        _ -> error "App node does not point at an App ValNode!!!"
+
+-- There has to be a term for what this does (can't remember it), but the general idea is given by the example:
+-- `combine [["a","b"],["c"],["d","e"]]` ~ `["acd","ace","bcd","bce"]`
+combine :: forall (a :: Type). (Monoid a) => [[a]] -> [a]
+combine [] = []
+combine (xs : xss) = go xs xss
+      where
+        go :: [a] -> [[a]] -> [a]
+        go as [] = as
+        go as (ys : yss) =
+            let as' = (<>) <$> as <*> ys
+             in go as' yss
+
+countToTyVars :: Count "tyvar" -> Vector (ValT AbstractTy)
+countToTyVars cnt
+   | cntI == 0 = mempty
+   | otherwise =  mkTV <$> Vector.fromList [0..(cntI - 1)]
+  where
+    cntI :: Int
+    cntI = review intCount cnt
+
+    mkTV :: Int -> ValT AbstractTy
+    mkTV =  Abstraction . BoundAt Z . fromJust . preview intIndex
