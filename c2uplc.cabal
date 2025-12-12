@@ -23,9 +23,10 @@ extra-source-files:
 common lang
   ghc-options:
     -Wredundant-strictness-flags -Wmissing-deriving-strategies
-   --  -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
-   -- -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
-   --  -Wmissing-import-lists
+
+  --  -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
+  -- -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
+  --  -Wmissing-import-lists
 
   default-extensions:
     BangPatterns
@@ -117,7 +118,6 @@ test-suite arg-resolution
   main-is:        Main.hs
   hs-source-dirs: test/arg-resolution
   build-depends:  plutus-core ==1.51.0.0
-
 
 test-suite concretification
   import:         test-lang
