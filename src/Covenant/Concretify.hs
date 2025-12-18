@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedLists #-}
 {- HLINT ignore "Use if" -}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StrictData #-}
 {- HLINT ignore "Use if" -}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -15,7 +16,7 @@ import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, execRWS, local, modify)
+import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
 
 import Covenant.ASG (
     ASG,
@@ -42,9 +43,11 @@ import Covenant.Type (
  )
 
 import Control.Applicative (Alternative ((<|>)))
+import Control.Monad (join)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.Reader (Reader, runReader)
 import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.Data (DatatypeInfo)
+import Covenant.Data (DatatypeInfo, mkMatchFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
 import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
 import Covenant.MockPlutus (PlutusTerm, constrData, listData, pApp, pLam, pVar, plutus_I)
@@ -57,7 +60,7 @@ import Data.Text qualified as T
 import Data.Void (Void, vacuous)
 import Data.Wedge (Wedge (Here, Nowhere, There))
 import Debug.Trace
-import Optics.Core (preview, review, view)
+import Optics.Core (ix, preview, review, view, (%))
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
 newtype LambdaId = LambdaId {_getLamId :: Id}
@@ -114,7 +117,11 @@ data MagicFunction
     , mfCompiled :: PlutusTerm
     , mfTypeSchema :: MagicTypeSchema
     , mfFunName :: Text
+    , mfNodeKind :: TyFixerNodeKind
     }
+
+data TyFixerNodeKind = MatchNode | IntroNode | CataNode
+    deriving stock (Show, Eq, Ord)
 
 data MagicTypeSchema
     = SOPSchema
@@ -124,16 +131,78 @@ data MagicTypeSchema
       -- We probably need this for all of the below "actually-an-application" things but I'm not 100% certain
       -- Quite possible we just need SOPSchema / DataSchema and that these variants are all redunant, keeping for now in case
       -- something requires special handling that I don't yet see
-      MatchDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
-    | CataDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
-    | IntroDataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
+      DataSchema (CompT AbstractTy) (AbstractTy -> Maybe Int)
 
 nextId :: RWS (Map TyName (DatatypeInfo AbstractTy)) () Id Id
 nextId = do
     UnsafeMkId s <- get
     let new = UnsafeMkId (s + 1)
-    modify $ \_ -> new
+    modify $ const new
     pure new
+
+{- NOTE: The type of the "function part" is just going to be the BBF (plus unwrappers),
+         since we always apply the scrutinee and handler functions "all at once" with the
+         match nodes we are transforming, and will therefore be able to concretify
+         any type variables occuring in the fully polymorphic function type.
+
+         So the type of the function for a SOP encoded `Maybe` would be:
+
+         `forall a r. Maybe a -> r -> (a -> r) -> r`
+
+         And for a data encoded maybe, it should ("eventually") be
+
+         `forall a r. Maybe a -> r -> (a -> r) -> (r -> r) -> r`
+
+         Though we are going to use the same "trick" here that we do for introduction, that is:
+           - For our first pass, we will replace `match` nodes with a dummy function with
+             no wrapper/unwrapper handlers
+           - We will codegen a suitable function that *does* make use of handlers, and record that
+             type seperately
+           - *After* we use the "initial" ASG to fully concretify the types, we will do another pass
+             where we will explicitly introduce the handlers as extra arguments to the function and
+             apply the needed handler arguments.
+
+         The reason for  doing things this way is that for our concretification analysis pass, we only really
+         care about ensuring that all type variables are fully concretified (or concretified as far as possible).
+         We need to know that to handle representational polymorphism. The "transform every type fixer into an app node"
+         this is intended to make the analysis much easier (which it does), but we need to complete that analysis
+         before we can determine *which* wrapper/unwrapper handlers the expanded function needs to be applied to.
+
+         This is admittedly a bit strange, however I do not think there is an easier way to do things.
+
+-}
+-- this will return a singleton map
+mkDestructorFunction :: TyName -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id (Map Id MagicFunction)
+mkDestructorFunction tn = do
+    dtDict <- ask
+    case M.lookup tn dtDict of
+        Nothing -> error "Used a datatype we don't have declarations for. Should not be possible at this stage."
+        Just dtInfo -> go dtInfo
+  where
+    go :: DatatypeInfo AbstractTy -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id (Map Id MagicFunction)
+    go dtInfo = do
+        let ogDecl = view #originalDecl dtInfo
+        case runExceptT (mkMatchFunTy ogDecl) of
+            -- "Nothing" here means "Datatype is isomorphic to `Void`"
+            Nothing -> pure M.empty
+            Just eRes -> case eRes of
+                Left bbfErr ->
+                    error $
+                        "Error: Could not create destructor function. Invalid datatype. BBF Error: "
+                            <> show bbfErr
+                Right matchFunTy -> do
+                    newId <- nextId
+                    schema <- mkMatchSchema dtInfo
+                    undefined
+
+    mkMatchSchema :: DatatypeInfo AbstractTy -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id MagicTypeSchema
+    mkMatchSchema = undefined
+
+    genElimFormPLCRec :: MagicTypeSchema -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id PlutusTerm
+    genElimFormPLCRec schema =
+        asks (join . preview (ix tn % #baseFunctor)) >>= \case
+            Just (bfbbDecl, bfbbTy) -> undefined
+            Nothing -> undefined
 
 mkConstructorFunctions :: TyName -> RWS (Map TyName (DatatypeInfo AbstractTy)) () Id (Map Id MagicFunction)
 mkConstructorFunctions tn = do
@@ -167,6 +236,7 @@ mkConstructorFunctions tn = do
                     , mfCompiled = compiled
                     , mfTypeSchema = schema
                     , mfFunName = funName
+                    , mfNodeKind = IntroNode
                     }
         pure $ M.insert newId here acc
       where
@@ -186,7 +256,7 @@ mkConstructorFunctions tn = do
             -- TODO/FIXME: Need to handle 0 argument constructors / Enum encodings BEFORE we do all this work
             -- REMINDER: DONT MIX UP TERM AND TYPE ARGS / CTOR ARGS VS FN ARGS
             SOPSchema -> undefined
-            IntroDataSchema (CompN _ (ArgsAndResult introFnArgs _)) getHandlerIx -> do
+            DataSchema (CompN _ (ArgsAndResult introFnArgs _)) getHandlerIx -> do
                 -- these are the ARGUMENTS TO THE CONSTRUCTOR
                 let ctorArgs = argTys
                 -- These are the NAMES OF ALL THE ARGUMENT TO THE INTRO FUNCTION. In this branch
@@ -268,7 +338,7 @@ mkConstructorFunctions tn = do
 
                     polyFnTy :: CompT AbstractTy
                     polyFnTy = CompN tvCnt $ ArgsAndResult (args <> extraArgs) result
-                 in IntroDataSchema polyFnTy (`M.lookup` hDict)
+                 in DataSchema polyFnTy (`M.lookup` hDict)
 
 transformMatchNode :: Id -> ValT AbstractTy -> Ref -> Vector Ref -> ()
 transformMatchNode = undefined
@@ -614,7 +684,7 @@ getLambdaSubASG asg i = case nodeAt i asg of
                 args' = vFoldMap goRef args
              in fnAsg <> args'
         Thunk child -> getLambdaSubASG asg child -- I think?
-        Cata alg arg -> goRef alg <> goRef arg
+        Cata ty handlers arg -> M.unionsWith (<>) (goRef <$> handlers) <> goRef arg
         DataConstructor _tn _cn args -> vFoldMap goRef args
         Match scrut handlers -> goRef scrut <> vFoldMap goRef handlers
   where
@@ -636,7 +706,7 @@ getAllNodes asg i = case thisNode of
         Thunk child -> here <> getAllNodes asg child
         DataConstructor _tn _cn args -> here <> Vector.foldMap goRef args
         Match scrut handlers -> here <> goRef scrut <> Vector.foldMap goRef handlers
-        Cata alg arg -> here <> goRef alg <> goRef arg
+        Cata ty handlers arg -> here <> M.unions (goRef <$> handlers) <> goRef arg
   where
     thisNode = nodeAt i asg
     here = M.singleton i thisNode
@@ -674,7 +744,7 @@ getCallSiteChainMap asg i callsites = case nodeAt i asg of
         Thunk child -> getCallSiteChainMap asg child callsites
         DataConstructor _ _ args -> vFoldMap id <$> traverse goRef args
         Match scrut handlers -> vFoldMap id <$> traverse goRef (scrut `Vector.cons` handlers)
-        Cata alg arg -> vFoldMap id <$> traverse goRef (Vector.fromList [alg, arg])
+        Cata ty handlers arg -> vFoldMap id <$> traverse goRef (Vector.fromList (arg : Vector.toList handlers))
   where
     goRef = \case
         AnArg{} -> pure M.empty
@@ -728,7 +798,7 @@ getCallChain' asg i = case nodeAt i asg of
             scrutPart <- goRef scrut
             handlersPart <- Vector.foldMap id <$> traverse goRef handlers
             pure $ scrutPart <> handlersPart
-        Cata alg arg -> Vector.foldMap id <$> traverse goRef (Vector.fromList [alg, arg])
+        Cata ty handlers arg -> Vector.foldMap id <$> traverse goRef (Vector.fromList (arg : Vector.toList handlers))
   where
     goRef = \case
         AnArg{} -> pure S.empty
@@ -763,7 +833,7 @@ tyInstDeps asg i = case nodeAt i asg of
             argsParts <- M.unionsWith goMerge <$> traverse goRef (Vector.toList args)
             pure $ M.unionsWith goMerge ([here, fnPart, argsParts] :: [(Map Id (Map Id (Vector Id)))])
         Thunk child -> tyInstDeps asg child
-        Cata alg arg -> M.unionWith goMerge <$> goRef alg <*> goRef arg
+        Cata ty handlers arg -> M.unionsWith goMerge <$> traverse goRef (arg : Vector.toList handlers)
         DataConstructor _tn _cn args -> M.unionsWith goMerge <$> (traverse goRef . Vector.toList $ args)
         Match scrut handlers -> do
             scrut' <- goRef scrut
@@ -800,7 +870,7 @@ getCallSites lambdas asg i = case nodeAt i asg of
                     fromArgs = M.unionsWith (<>) . map goRef . Vector.toList $ args
                  in M.unionsWith (<>) ([here, fromFn, fromArgs] :: [(Map LambdaId (Set AppId))])
         Thunk child -> getCallSites lambdas asg child
-        Cata alg arg -> M.unionWith (<>) (goRef alg) (goRef arg)
+        Cata ty handlers arg -> M.unionsWith (<>) (goRef <$> (arg : Vector.toList handlers))
         DataConstructor _tn _cn args -> M.unionsWith (<>) (goRef <$> args)
         Match scrut handlers -> M.unionWith (<>) (goRef scrut) (M.unionsWith (<>) (goRef <$> handlers))
   where
@@ -830,9 +900,9 @@ getTypeFixerChains asg i = case nodeAt i asg of
             logTyFixer AMatchId i
             goRef scrut
             traverse_ goRef handlers
-        Cata alg arg -> do
+        Cata ty handlers arg -> do
             logTyFixer ACataId i
-            goRef alg
+            traverse_ goRef handlers
             goRef arg
         DataConstructor _tn _cn args -> do
             logTyFixer AConstrId i
@@ -871,7 +941,7 @@ allLambdas asg i = case nodeAt i asg of
                 argsPart = Vector.foldMap goRef args
              in fnPart <> argsPart
         Thunk child -> allLambdas asg child
-        Cata alg arg -> foldMap goRef ([alg, arg] :: [Ref])
+        Cata ty handlers arg -> foldMap goRef ((arg : Vector.toList handlers) :: [Ref])
         DataConstructor _tn _cn args -> Vector.foldMap goRef args
         Match scrut handlers -> goRef scrut <> Vector.foldMap goRef handlers
   where

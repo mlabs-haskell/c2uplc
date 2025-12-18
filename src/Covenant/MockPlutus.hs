@@ -24,6 +24,13 @@ module Covenant.MockPlutus (
     pBuiltin,
     pCase,
     idName,
+    unIData,
+    unListData,
+    pHead,
+    pTail,
+    unConstrData,
+    pFst,
+    pSnd,
 ) where
 
 import Covenant.Constant (AConstant)
@@ -88,6 +95,9 @@ pDataList = undefined
 iData :: PlutusTerm -> PlutusTerm
 iData = undefined
 
+unIData :: PlutusTerm -> PlutusTerm
+unIData = undefined
+
 -- 'B'
 bData :: PlutusTerm -> PlutusTerm
 bData = undefined
@@ -96,8 +106,30 @@ bData = undefined
 constrData :: PlutusTerm -> PlutusTerm -> PlutusTerm
 constrData = undefined
 
+-- This rips apart a (data) Constr and returns the (Int,[Data]) pair (at the PLC level)
+unConstrData :: PlutusTerm -> PlutusTerm
+unConstrData = undefined
+
+-- convenience for pApp FstPair
+pFst :: PlutusTerm -> PlutusTerm
+pFst = undefined
+
+-- convenicne for pApp SndPair
+pSnd :: PlutusTerm -> PlutusTerm
+pSnd = undefined
+
 listData :: Vector PlutusTerm -> PlutusTerm
 listData = undefined
+
+-- List xs -> xs
+unListData :: PlutusTerm -> PlutusTerm
+unListData = undefined
+
+pHead :: PlutusTerm -> PlutusTerm
+pHead = undefined
+
+pTail :: PlutusTerm -> PlutusTerm
+pTail = undefined
 
 mapData :: Vector PlutusTerm -> PlutusTerm
 mapData = undefined

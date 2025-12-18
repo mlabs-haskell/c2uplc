@@ -104,6 +104,7 @@ executable c2uplc
 library
   import:          lang
   exposed-modules:
+    Covenant.AppTransform
     Covenant.ArgDict
     Covenant.CodeGen
     Covenant.Concretify
