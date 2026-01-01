@@ -176,9 +176,12 @@ nodeToTerm i argDict = \case
             resolvedArgs <- traverse (refToTerm i' argDict) args
             pure $ foldl' pApp fTerm resolvedArgs
         Thunk i' -> thunkToTerm i'
-        Cata alg val -> cataToTerm alg val
-        DataConstructor tn cn fields -> dataConToTerm i argDict tn cn fields
-        Match scrut handlers -> matchToTerm i argDict scrut handlers
+        _ -> error "All type fixing pseudo-app nodes should have been removed from the ASG by the point we call this function"
+    {-
+    Cata alg val -> cataToTerm alg val
+    DataConstructor tn cn fields -> dataConToTerm i argDict tn cn fields
+    Match scrut handlers -> matchToTerm i argDict scrut handlers
+    -}
     AnError -> pure pError
 
 matchToTerm :: Id -> Map Id (Either (Vector Name) (Vector Id)) -> Ref -> Vector Ref -> CodeGenM PlutusTerm
@@ -324,7 +327,7 @@ countOccurs i = foldl' go 0
             Lit _aConstant -> n
             App fn args _ _ -> n + countId fn + sum (countRef <$> args)
             Thunk i' -> n + countId i'
-            Cata alg val -> n + countRef alg + countRef val
+            Cata ty handlers arg -> n + sum (countRef <$> arg `Vector.cons` handlers)
             DataConstructor _tn _cn fields -> n + sum (countRef <$> fields)
             Match scrut handlers -> n + countRef scrut + sum (countRef <$> handlers)
         AnError{} -> n

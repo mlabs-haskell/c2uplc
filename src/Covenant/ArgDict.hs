@@ -64,7 +64,7 @@ mkArgResolutionDict asg i = case nodeAt i asg of
             argsDicts <- mconcat <$> traverse goRef (Vector.toList args)
             pure $ fnDict <> argsDicts
         Thunk child -> notALambda $ mkArgResolutionDict asg child
-        Cata alg arg -> notALambda $ (<>) <$> goRef alg <*> goRef arg
+        Cata ty handlers arg -> notALambda $ mconcat <$> traverse goRef (arg : Vector.toList handlers)
         DataConstructor _tn _cn args -> notALambda $ mconcat <$> traverse goRef (Vector.toList args)
         Match scrut handlers -> notALambda $ mconcat <$> traverse goRef (scrut : Vector.toList handlers)
   where

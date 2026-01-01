@@ -19,7 +19,7 @@ import Optics.Core (preview, review)
 main :: IO ()
 main = case debugTest hiddenConcretificationTest of
     Left err -> error (show err)
-    Right asg -> print $ getTypeFixerChains' asg (topLevelId asg)
+    Right asg -> print $ asg
 
 -- FIXME: The maybe here *really* should be `Either`, we might not get "enough rigids" here for this to be useful w Maybe,
 --        but it's easier to start w/ maybe and get that compiling then switch over
