@@ -86,13 +86,15 @@ import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
 import Covenant.Transform.Common
 
-mkCatamorphism :: TyName -> AppTransformM (Map Id TyFixerFnData)
+-- A 'Nothing' result here indicates that the type isn't recursive
+mkCatamorphism :: TyName -> AppTransformM (Maybe CataData)
 mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> AppTransformM (Map Id TyFixerFnData)
+    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe CataData)
     go dtInfo = case view #originalDecl dtInfo of
         OpaqueData{} -> error "Do we support catamorphisms over opaque types? If we do come back and fix this later"
-        nonOpaqueDecl -> case runExceptT (mkCataFunTy nonOpaqueDecl) of
+        nonOpaqueDecl -> if not (isRecursiveDatatype nonOpaqueDecl) then pure Nothing else
+          case runExceptT (mkCataFunTy nonOpaqueDecl) of
             {- First thing: We need to get ahold of the Cata Fn type. This is just the BB form with a
                datatype argument prepended, so, for `List`, it would be something like:
                `forall a r. List a -> r -> (a -> r -> r) -> r`
@@ -125,7 +127,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                                 , mfFunName = cataFunName
                                 , mfNodeKind = CataNode
                                 }
-                    pure $ M.singleton newId here
+                    pure . Just $ CataData  newId here
     genCataPLC ::
         CompT AbstractTy ->
         Text ->
@@ -288,3 +290,38 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
 
     isR :: ValT AbstractTy -> Bool
     isR (Abstraction (BoundAt _ indx)) = indx == rIndex
+
+
+{- Strictly we don't need this, we could just examine every ASG node and check whether
+   a catamorphism for the type we're concerned with is used, or we could drive this process by
+   ASG node inspection instead of doing it "all at once, for every datatype". But that's kind of awkward,
+   and I think it's just easier to check whether the type is recursive.
+-}
+isRecursiveDatatype :: DataDeclaration AbstractTy -> Bool
+isRecursiveDatatype OpaqueData{} = False
+isRecursiveDatatype (DataDeclaration tn cnt ctors enc) = any check ctors
+ where
+  tyVarArgs :: Vector (ValT AbstractTy)
+  tyVarArgs = countToTyVars cnt
+
+  check :: Constructor AbstractTy -> Bool
+  check (Constructor _ args) = any (isRec tyVarArgs) args
+
+  bump :: ValT AbstractTy -> ValT AbstractTy
+  bump = \case
+    Abstraction (BoundAt db i) -> Abstraction (BoundAt (S db) i)
+    other -> other
+
+  isRec :: Vector (ValT AbstractTy) -> ValT AbstractTy -> Bool
+  isRec tyVars = \case
+    -- We don't allow polymorphic fn arguments to constructors.
+    -- ...we might not allow any fn arguments, but I can't remember.
+    -- At any rate, if we do, they have to be Comp0s, which makes this easier
+    -- I *think* we only care about possible occurrences in the arguments? I'm not 100%
+    -- sure but I think that recursion in the result type would be contravariant and therefore
+    -- not something we have to care about, NOTE ask Koz
+    ThunkT (CompN _ (ArgsAndResult args _)) ->
+      let tyVars' = fmap bump tyVars
+      in any (isRec tyVars') args
+    Datatype tn' dtArgs -> (tn' == tn && dtArgs == tyVars) || any (isRec tyVars) dtArgs
+    _ -> False 

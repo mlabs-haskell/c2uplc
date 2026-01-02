@@ -111,16 +111,17 @@ import Covenant.Transform.Common
          This is admittedly a bit strange, however I do not think there is an easier way to do things.
 
 -}
--- this will return a singleton map
-mkDestructorFunction' :: TyName -> AppTransformM (Map Id TyFixerFnData)
-mkDestructorFunction' tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
+
+-- The ONLY case where we should end up with Nothing is something isomorphic to Void
+mkDestructorFunction :: TyName -> AppTransformM (Maybe MatchData)
+mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> AppTransformM (Map Id TyFixerFnData)
+    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe MatchData)
     go dtInfo = do
         let ogDecl = view #originalDecl dtInfo
         case runExceptT (mkMatchFunTy ogDecl) of
             -- "Nothing" here means "Datatype is isomorphic to `Void`"
-            Nothing -> pure M.empty
+            Nothing -> pure Nothing
             Just eRes -> case eRes of
                 Left bbfErr ->
                     error $
@@ -142,7 +143,7 @@ mkDestructorFunction' tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                                 , mfFunName = matchFunName
                                 , mfNodeKind = MatchNode
                                 }
-                    pure $ M.singleton newId here
+                    pure . Just $ MatchData newId here
     {- IMPORTANT NOTE: While *here* we are working with a generated match function with branch handler
                        arguments that will NOT be thunked for nullary constructors (i.e. the type of a
                        Nothing handler HERE is `r` and not `ThunkT (ReturnT r)`), we have to REMEMBER TO

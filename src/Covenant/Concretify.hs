@@ -725,3 +725,14 @@ countToTyVars cnt
 
     mkTV :: Int -> ValT AbstractTy
     mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
+
+countToAbstractions :: Count "tyvar" -> Vector AbstractTy
+countToAbstractions cnt
+    | cntI == 0 = mempty
+    | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
+  where
+    cntI :: Int
+    cntI = review intCount cnt
+
+    mkTV :: Int -> AbstractTy
+    mkTV =  BoundAt Z . fromJust . preview intIndex

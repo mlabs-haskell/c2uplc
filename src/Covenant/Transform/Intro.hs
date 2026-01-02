@@ -82,21 +82,21 @@ import Covenant.Transform.Common
 
 -- TODO: Better comments (tho fortunately this one is the most straightforward)
 
-mkConstructorFunctions :: TyName -> AppTransformM (Map Id TyFixerFnData)
+mkConstructorFunctions :: TyName -> AppTransformM IntroData
 mkConstructorFunctions tn =
     lookupDatatypeInfo tn >>= \dtInfo -> case view #originalDecl dtInfo of
         DataDeclaration tn cnt ctors enc -> do
-            Vector.ifoldM (go dtInfo cnt enc) M.empty ctors
+            IntroData <$> Vector.ifoldM (go dtInfo cnt enc) Vector.empty ctors
         OpaqueData{} -> error "TODO: intro forms for opaque"
   where
     go ::
         DatatypeInfo AbstractTy ->
         Count "tyvar" ->
         DataEncoding ->
-        Map Id TyFixerFnData ->
+        Vector (Id,TyFixerFnData) ->
         Int ->
         Constructor AbstractTy ->
-        AppTransformM (Map Id TyFixerFnData)
+        AppTransformM (Vector (Id,TyFixerFnData))
     go dtInfo cnt enc acc cIx (Constructor (ConstructorName cName) argTys) = do
         let ctorFnTy = mkCtorFnTy cnt argTys
             schema = mkTypeSchema enc ctorFnTy
@@ -113,7 +113,7 @@ mkConstructorFunctions tn =
                     , mfFunName = funName
                     , mfNodeKind = IntroNode
                     }
-        pure $ M.insert newId here acc
+        pure $ Vector.snoc acc (newId,here)
       where
         genIntroFormPLC ::
             DataEncoding ->

@@ -13,6 +13,10 @@ module Covenant.Transform.Common (
     runAppTransformM,
     TyFixerFnData (..),
     TyFixerNodeKind (..),
+    IntroData(..),
+    MatchData(..),
+    CataData(..),
+    TyFixerDataBundle(..),
     nextId,
     freshName,
     freshNamePrefix,
@@ -145,6 +149,7 @@ runAppTransformM datatypes polyRepHandlers maxId (AppTransformM act) = (x, i)
   where
     (x, i, _) = runRWS act (datatypes, polyRepHandlers) maxId
 
+
 -- stupid helpers
 
 -- Something has gone really, horrifically wrong if something is annotated w/ a datatype type
@@ -251,6 +256,23 @@ data TyFixerFnData
 
 data TyFixerNodeKind = MatchNode | IntroNode | CataNode
     deriving stock (Show, Eq, Ord)
+
+{- Need some kind of structured container for holding the results of our
+   generated data for functionalized type fixers.
+
+   I *think* that every datatype (other than Void, which doesn't matter, because it can't exist
+   as a term to match on or introduce) should end up having IntroData and MatchData, but only recursive types get a
+   CataData.
+
+-}
+data CataData = CataData Id TyFixerFnData
+
+data MatchData = MatchData Id TyFixerFnData
+
+newtype IntroData = IntroData (Vector (Id,TyFixerFnData))
+
+data TyFixerDataBundle
+  = TyFixerDataBundle {introData :: IntroData, matchData :: MatchData, cataData :: Maybe CataData}
 
 nextId :: AppTransformM Id
 nextId = do
