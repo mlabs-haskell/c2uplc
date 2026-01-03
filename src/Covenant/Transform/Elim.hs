@@ -113,10 +113,10 @@ import Covenant.Transform.Common
 -}
 
 -- The ONLY case where we should end up with Nothing is something isomorphic to Void
-mkDestructorFunction :: TyName -> AppTransformM (Maybe MatchData)
+mkDestructorFunction :: TyName -> AppTransformM (Maybe TyFixerFnData)
 mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe MatchData)
+    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe TyFixerFnData)
     go dtInfo = do
         let ogDecl = view #originalDecl dtInfo
         case runExceptT (mkMatchFunTy ogDecl) of
@@ -129,7 +129,6 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                             <> show bbfErr
                 Right matchFunTy -> do
                     let enc = view #datatypeEncoding ogDecl
-                    newId <- nextId
                     let schema = mkTypeSchema enc matchFunTy
                     let matchFunName = "match_" <> tyNameInner
                     compiled <- genElimFormPLC matchFunTy matchFunName enc schema
@@ -143,7 +142,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                                 , mfFunName = matchFunName
                                 , mfNodeKind = MatchNode
                                 }
-                    pure . Just $ MatchData newId here
+                    pure . Just $ here
     {- IMPORTANT NOTE: While *here* we are working with a generated match function with branch handler
                        arguments that will NOT be thunked for nullary constructors (i.e. the type of a
                        Nothing handler HERE is `r` and not `ThunkT (ReturnT r)`), we have to REMEMBER TO

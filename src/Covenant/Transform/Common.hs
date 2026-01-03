@@ -13,10 +13,7 @@ module Covenant.Transform.Common (
     runAppTransformM,
     TyFixerFnData (..),
     TyFixerNodeKind (..),
-    IntroData(..),
-    MatchData(..),
-    CataData(..),
-    TyFixerDataBundle(..),
+    TyFixerDataBundle (..),
     nextId,
     freshName,
     freshNamePrefix,
@@ -46,7 +43,7 @@ import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify, runRWS)
+import Control.Monad.RWS.Strict (MonadState (put), RWS, ask, asks, execRWS, local, modify, runRWS)
 
 import Covenant.ASG (
     ASG,
@@ -102,6 +99,7 @@ import PlutusCore.Name.Unique (
  )
 
 import Covenant.ArgDict (idToName)
+import Covenant.ExtendedASG
 import Covenant.MockPlutus (
     PlutusTerm,
     constrData,
@@ -129,26 +127,29 @@ data PolyRepHandler = PolyRepHandler {project :: Id, embed :: Id} deriving stock
 
 -- N.B. we need the `Map BuiltinFlatT Id` to record the projection/embedding function ids
 -- TODO: Errors?
-newtype AppTransformM a = AppTransformM (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () Id a)
+newtype AppTransformM a = AppTransformM (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () ExtendedASG a)
     deriving
         ( Functor
         , Applicative
         , Monad
         , MonadReader (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler)
-        , MonadState Id
+        , MonadState ExtendedASG
         )
-        via (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () Id)
+        via (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () ExtendedASG)
+
+instance MonadASG AppTransformM where
+    getASG = get
+    putASG = put
 
 runAppTransformM ::
     Map TyName (DatatypeInfo AbstractTy) ->
     Map BuiltinFlatT PolyRepHandler ->
-    Id ->
+    ExtendedASG ->
     AppTransformM a ->
-    (a, Id)
-runAppTransformM datatypes polyRepHandlers maxId (AppTransformM act) = (x, i)
+    (a, ExtendedASG)
+runAppTransformM datatypes polyRepHandlers asg (AppTransformM act) = (x, i)
   where
-    (x, i, _) = runRWS act (datatypes, polyRepHandlers) maxId
-
+    (x, i, _) = runRWS act (datatypes, polyRepHandlers) asg
 
 -- stupid helpers
 
@@ -180,7 +181,7 @@ lookupPolyRepHandler = \case
 
    Largely a convenience b/c the implementation has to be somewhat ugly and is effectively duplicated several times.
 -}
-resolvePolyRepHandler :: -- Tells us whether we need a projection or embedding
+resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exists)
     TyFixerNodeKind ->
     -- Gives us the index into the list of terms representing
     -- function arguments which corresponds to the projection/embedding function
@@ -265,21 +266,8 @@ data TyFixerNodeKind = MatchNode | IntroNode | CataNode
    CataData.
 
 -}
-data CataData = CataData Id TyFixerFnData
-
-data MatchData = MatchData Id TyFixerFnData
-
-newtype IntroData = IntroData (Vector (Id,TyFixerFnData))
-
 data TyFixerDataBundle
-  = TyFixerDataBundle {introData :: IntroData, matchData :: MatchData, cataData :: Maybe CataData}
-
-nextId :: AppTransformM Id
-nextId = do
-    UnsafeMkId s <- get
-    let new = UnsafeMkId (s + 1)
-    modify $ const new
-    pure new
+    = TyFixerDataBundle {introData :: Vector TyFixerFnData, matchData :: Maybe TyFixerFnData, cataData :: Maybe TyFixerFnData}
 
 freshName :: AppTransformM Name
 freshName = do

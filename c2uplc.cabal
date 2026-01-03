@@ -24,9 +24,9 @@ common lang
   ghc-options:
     -Wredundant-strictness-flags -Wmissing-deriving-strategies
 
-  --  -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
+  -- -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
   -- -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
-  --  -Wmissing-import-lists
+  -- -Wmissing-import-lists
 
   default-extensions:
     BangPatterns
@@ -66,6 +66,7 @@ common lang
     , nonempty-vector
     , optics-core
     , optics-extra
+    , row-types
     , smash
     , text
     , transformers
@@ -106,6 +107,7 @@ library
     Covenant.ArgDict
     Covenant.CodeGen
     Covenant.Concretify
+    Covenant.ExtendedASG
     Covenant.Transform
     Covenant.Transform.Cata
     Covenant.Transform.Common
