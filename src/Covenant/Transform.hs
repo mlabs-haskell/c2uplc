@@ -11,7 +11,7 @@ import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
+import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify, put)
 
 import Covenant.ASG (
     ASG (ASG),
@@ -89,7 +89,7 @@ import Covenant.JSON
 
 import Control.Monad (foldM)
 import Control.Monad.Writer.Strict (MonadWriter)
-import Covenant.Concretify (countToAbstractions, getInstantiations, resolveVar, substCompT)
+import Covenant.Concretify (AppId (AppId), LambdaId (LambdaId), compTArgSchema, countToAbstractions, decideConcrete, getInstantiations, instantiationHelper, resolveVar, substCompT)
 import Covenant.ExtendedASG
 import Covenant.JSON (CompilationUnit (..))
 import Covenant.Transform.Cata
@@ -101,9 +101,269 @@ import Data.Row.Dictionaries qualified as R
 import Data.Row.Records (HasType, Rec, Row, (.+), (.==), type (.+), type (.-), type (.==))
 import Data.Row.Records qualified as R
 import Data.Set qualified as Set
+import GHC.TypeLits (KnownSymbol, Symbol)
 
-transformASG :: CompilationUnit -> (Rec ASGMetaData, ExtendedASG)
-transformASG (CompilationUnit datatypes asg _) = flip runState extended $ do
+{-
+
+  TOMORROW:
+    - FIRST: Write the machinery which handles the extra argument applications. Just assume that you have
+             the data structure you need. 99% of the difficulty of that is figuring out what that data structure ought to be.
+
+    - THEN: Try to massage the concretification data into that structure.
+
+    - THEN: Write the pass that performs the concretifications.
+
+    - THEN: Attempt to debug and just disable concretification stuff and use a monomorphic example if things are horribly broken there.
+
+    NOTE: Keep in mind that we still have to codegen "bottom up".
+
+-}
+
+{-
+   This is just a scaffold, i'll have to fix it later once I figure out how to fill in the
+   placeholder functions
+
+   I'm really kind of stumped as to how to use the result of our analysis pass to do this.
+
+   We end up with a `Map LambdaId (Map AppId (Set (Map AbstractTy (ValT Void))))`
+
+   That tells us all of the possibilities, but I don't think it gives us any way to associate the
+   relevant possibility with our location in the ASG during the replacement traversal.
+-}
+
+{- We need to keep track of:
+     1. SOMETHING that serves the role of a Context of rigid concretifications along our path.
+        So, a (Map AppId (Map (Index "tyvar") (ValT Void))) should work. I think?
+     2. The "path" we're on. I think we really only need three things here:
+          a. The "call site chain", so a Vector AppId
+          b. Our current DeBruijn "level". (Or maybe not? Is that actually useful?)
+          c. A stack of lambdas above us
+
+     We also need to read from our TyFixer Map (and should probably construct a reverse lookup table
+     to be able to lookup by Id there to avoid a ton of duplicated and superfluous type level surgery)
+
+-}
+
+type ConcretifyCxt =
+    "context" .== Map AppId (Map (Index "tyvar") (ValT Void))
+        .+ "callPath" .== Vector LambdaId
+        .+ "appPath" .== Vector AppId
+        .+ "tyFixers" .== Map Id TyFixerDataBundle
+        .+ "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
+        .+ "identityFn" .== ExtendedId
+        .+ "uniqueError" .== ExtendedId
+        .+ "modifiedNodes" .== Set ExtendedId
+
+instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
+    getASG = get
+    putASG = put
+
+{- By this point the entire asg is nothing but lam, app, thunk/force, and builtins/primitives
+
+i need some kind of example
+
+f :: Int -> Bool -> String -> ByteString
+f i b s = (g i) (g b) (g (g s))
+
+-}
+
+resolveRepPoly :: RWS (Rec ConcretifyCxt) () ExtendedASG ()
+resolveRepPoly = eTopLevelSrcNode >>= go . fst
+  where
+    unsafeFnTy :: forall m k. (MonadASG m, ExtendedKey k) => k -> m (CompT AbstractTy)
+    unsafeFnTy k =
+        eNodeAt k >>= \case
+            ACompNode compT _ -> pure compT
+            other -> error $ "unsafeFnTy called on " <> show other <> " which isn't a comp node"
+
+    goRef :: Ref -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    goRef = \case
+        AnId i -> resolveExtended i >>= go
+        AnArg{} -> pure ()
+
+    dbBindingSite :: DeBruijn -> RWS (Rec ConcretifyCxt) () ExtendedASG LambdaId
+    dbBindingSite db = do
+        let dbInt = review asInt db
+        scopeStack <- asks (R..! #callPath)
+        pure $ scopeStack Vector.! dbInt
+
+    decideSubs :: Map AbstractTy (ValT AbstractTy) -> Maybe (Map (Index "tyvar") (ValT Void))
+    decideSubs m =
+        foldM
+            (\acc (BoundAt _ i, t) -> decideConcrete t >>= \x -> pure $ M.insert i x acc)
+            M.empty
+            (M.toList m)
+
+    -- This will be the thing that:
+    --   1. Replaces the function type with one that has the handlers
+    --   2. Applies the handlers
+    --   3. Updates the type of the corresponding synthetic function (i.e. modifies the node) to
+    --      explicitly mention the handlers (NOTE: THIS DOES NOT CONCRETIFY THE SYNTHETIC FUNCTION NODE)
+    cleanupAppNode :: ExtendedId -> Map (Index "tyvar") (ValT Void) -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    cleanupAppNode = undefined
+
+    resolveRigid :: AbstractTy -> RWS (Rec ConcretifyCxt) () ExtendedASG (Index "tyvar", ValT Void)
+    resolveRigid rgd@(BoundAt db i) = do
+        bindingLam <- dbBindingSite db
+        context <- asks (R..! #context)
+        findClosestAppWithFn bindingLam >>= \case
+            Nothing -> error $ "No app node in our app path found with function id: " <> show bindingLam
+            Just appId -> case M.lookup appId context >>= M.lookup i of
+                Nothing -> error $ "Could not resolve rigid " <> show rgd <> ", no type found in context"
+                Just res -> pure (i, res)
+      where
+        findClosestAppWithFn :: LambdaId -> RWS (Rec ConcretifyCxt) () ExtendedASG (Maybe AppId)
+        findClosestAppWithFn lid = do
+            appPath <- asks (R..! #appPath)
+            appsWithNodes <- traverse (\x@(AppId i) -> (x,) <$> eNodeAt i) appPath
+            let matchesLam = \case
+                    AValNode _ (App fn _ _ _) -> LambdaId fn == lid
+                    _ -> False
+            pure $ fst <$> Vector.find (matchesLam . snd) appsWithNodes
+
+    go :: ExtendedId -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    go eid =
+        eNodeAt eid >>= \case
+            AnError -> pure ()
+            ACompNode compT compNode -> case compNode of
+                Lam bRef -> do
+                    let lamId = LambdaId $ forgetExtendedId eid
+                    local (mapField #callPath (Vector.cons lamId)) $ goRef bRef
+                Force fRef -> goRef fRef
+                _ -> pure ()
+            AValNode valT valNode -> case valNode of
+                App fn args instTys cFunTy -> do
+                    {- There have to be two branches here:
+                         1. If  there aren't any rigids remaining in the "concrete as possible"
+                            type ('ty' here) then we just log the result and move to the children
+
+                         2. If there ARE rigids remaining, we need to resolve them.
+                            The old procedure for doing this is super convoluted but I think we can take a
+                            shortcut and do something like:
+                              - We can get the ID of the lambda by indexing into our callPath
+                              - Then we find the app that fixes the types by looking for the first
+                                application above us (i.e. in the appPath) which contains that lambda as
+                                a fn.
+
+                                I am pretty sure that app has to be the one that determines the concretifications.
+                                But REVIEW check with Koz.
+                              - Then we look up the entry for that Lambda,App pair and we're done with the
+                                "hard" part (we still have to do some annoying type/term surgery but that's just tedious)
+
+                        That should work. We have to be carefuly to only recurse with the
+                        current AppId cons'd onto the FUNCTION PART of the recursion. The appChain
+                        is supposed to *mean* something like: All of the applications above us which
+                        might determine the concrete types of our rigids. An application can only
+                        concretify the type of the function. I THINK?!
+                    -}
+                    -- Again this actually collects all type variables but they basically have to be rigid here if they exist
+                    polyFnTy <- unsafeFnTy fn
+                    fnEid <- resolveExtended fn
+                    let CompN cnt (ArgsAndResult polyArgs _) = polyFnTy
+                        bVars = Vector.toList $ countToAbstractions cnt
+                        CompN _ (ArgsAndResult monoArgs _) = cFunTy
+                        subs = flip runReader 0 $ getInstantiations bVars (Vector.toList polyArgs) (Vector.toList monoArgs)
+                        (concrete, nonConcrete) = M.partition isConcrete subs
+                        here = AppId . forgetExtendedId $ eid
+                    if null nonConcrete
+                        then do
+                            let thisContext = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
+                                localF :: Rec ConcretifyCxt -> Rec ConcretifyCxt
+                                localF =
+                                    mapField #context (M.insert here thisContext)
+                                        . mapField #appPath (Vector.cons here)
+                            local localF $ go fnEid
+                            traverse_ goRef args
+                            cleanupAppNode eid thisContext
+                        else do
+                            let rigids = collectRigids cFunTy
+                            rigidsResolved <- M.fromList <$> traverse resolveRigid (S.toList rigids)
+                            let sanitizedConcrete = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
+                                thisContext = rigidsResolved <> sanitizedConcrete
+                                localF =
+                                    mapField #context (M.insert here thisContext)
+                                        . mapField #appPath (Vector.cons here)
+                            local localF $ go fnEid
+                            traverse_ goRef args
+                            cleanupAppNode eid thisContext
+                Thunk child -> resolveExtended child >>= go
+                -- This is only meant to be used on ASGs that have undergone the
+                -- TypeFixerNode -> AppNode transformation, so there shouldn't be any other possibilities
+                -- here. (We can ignore literals)
+                _ -> pure ()
+
+isConcrete :: ValT AbstractTy -> Bool
+isConcrete = isJust . decideConcrete
+
+-- unsafe
+assertConcrete :: ValT AbstractTy -> ValT Void
+assertConcrete = fromJust . decideConcrete
+
+collectRigids :: CompT AbstractTy -> Set AbstractTy
+collectRigids =
+    mconcat
+        . Vector.toList
+        . fmap (flip runReader 0 . go)
+        . compTArgSchema
+  where
+    go :: ValT AbstractTy -> Reader Int (Set AbstractTy)
+    go = \case
+        Abstraction x -> S.singleton <$> resolveVar x
+        ThunkT compT -> local (+ 1) $ do
+            let argSchema = compTArgSchema compT
+            mconcat <$> traverse go (Vector.toList argSchema)
+        BuiltinFlat{} -> pure S.empty
+        Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
+
+-- Checks whether a "was rigid" (identified by the Index) is instantiated at a given call site of the lambda
+-- which binds it, and if so, sorts the resulting type that instantiates it into concrete or abstract.
+concretifies ::
+    forall m.
+    (MonadASG m) =>
+    Index "tyvar" -> -- The arg index of the rigid. We know the DeBruijn must be Z
+    AppId -> -- AppId of *a* call site of a "parent" lambda that binds the rigid we're examining
+    -- We either get:
+    --   1. Nothing (which indicates an internal error or something weird with a phantom type variable
+    --      (REVIEW: Do we sufficiently 'check' for phantom tyvars before this? The requirements here
+    --               may differ from our previous ones. A phantom tyvar is fine if it's never *used*
+    --               anywhere, but things could get really broken if we don't forbid their use
+    --               ***in explicit type applications that would result in them being a ridid***.
+    --      )
+    --   2. An rigid type variable, which means we have more work to do.
+    --   3. A concrete type, which is what we want.
+    m (Wedge (ValT Void) (ValT AbstractTy))
+concretifies argPos (AppId pcsId) =
+    eNodeAt pcsId >>= \case
+        AValNode _ (App fn _args _instArgs monoFunTy) -> do
+            polyFunTy <- eLambdaTy (LambdaId fn)
+            let var = BoundAt Z argPos
+            case instantiationHelper id var monoFunTy polyFunTy of
+                Nothing -> pure Nowhere
+                Just ty -> case decideConcrete ty of
+                    Nothing -> pure $ There ty
+                    Just ty' -> pure $ Here ty'
+        _ -> error "App node does not point at an App ValNode!!!"
+
+eLambdaTy :: forall m. (MonadASG m) => LambdaId -> m (CompT AbstractTy)
+eLambdaTy (LambdaId l) =
+    eNodeAt l >>= \case
+        ACompNode compT _ -> pure compT
+        _other -> error "Lambda id points at non-comp-node"
+
+mapField ::
+    forall (l :: Symbol) (a :: Type) (r :: Row Type).
+    (KnownSymbol l, HasType l a r) =>
+    R.Label l ->
+    (a -> a) ->
+    Rec r ->
+    Rec r
+mapField l f r = R.update l (f (r R..! l)) r
+
+--------------------------------------------------------------------
+--- Everything above this should get moved back to Concretify later
+---------------------------------------------------------------------
+transformASG :: CompilationUnit -> Rec ASGCodeGenBundle
+transformASG (CompilationUnit datatypes asg _) = flip evalState extended $ do
     let dtDict = unsafeMkDatatypeInfos (Vector.toList datatypes)
     firstPassMeta <- mkProjectionsAndEmbeddings
     let builtinHandlers = firstPassMeta R..! #builtinHandlers
@@ -117,8 +377,7 @@ transformASG (CompilationUnit datatypes asg _) = flip runState extended $ do
                 .+ #visited .== S.empty
                 .+ #tyFixerData .== tyFixerData
 
-    finalMeta <- snd <$> unliftMetaM transformState transformTypeFixerNodes
-    pure finalMeta
+    snd <$> unliftMetaM transformState transformTypeFixerNodes
   where
     extended :: ExtendedASG
     extended = wrapASG asg
@@ -139,7 +398,7 @@ unliftMetaM r act = do
     putASG (rOut R..! #asg)
     pure (a, rOut)
 
-type ASGMetaData =
+type ASGCodeGenBundle =
     "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
         .+ "identityFn" .== ExtendedId
         .+ "uniqueError" .== ExtendedId

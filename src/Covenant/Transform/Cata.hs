@@ -135,6 +135,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         DataEncoding ->
         TypeSchema ->
         AppTransformM PlutusTerm
+    -- \* TODO/FIXME: We really need to check whether it has a builtin encoding first and process that separately. Most of what we do here isn't useful for those.
     genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase enc schema = do
         {- NOTE: This is a bit different than the other cases. Here, a cata function will have a type like:
                    `forall a r. List a -> r -> (a -> r -> r) -> r` (ignoring the extra handler arguments that come at the end)
