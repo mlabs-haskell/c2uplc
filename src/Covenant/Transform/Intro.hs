@@ -1,82 +1,38 @@
 module Covenant.Transform.Intro where
 
-import Data.Map (Map)
-import Data.Map qualified as M
 
-import Data.Set (Set)
-import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
 
-import Covenant.ASG (
-    ASG,
-    ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
-    Id,
-    Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
-    topLevelId,
- )
 import Covenant.Type (
-    AbstractTy (BoundAt),
-    BuiltinFlatT,
-    CompT (Comp0, CompN),
-    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
+    AbstractTy,
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
     Constructor (Constructor),
     ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
     DataEncoding (BuiltinStrategy, PlutusData, SOP),
     PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
-    TyName (TyName),
-    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
-    tyvar,
+    ValT (Datatype), TyName,
  )
 
-import Control.Applicative (Alternative ((<|>)))
-import Control.Monad (join)
-import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (MonadReader, Reader, runReader)
-import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.ArgDict (idToName)
-import Covenant.Data (DatatypeInfo, mkCataFunTy, mkMatchFunTy)
-import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
-import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
+import Covenant.Data (DatatypeInfo)
+import Covenant.Index (Count)
 import Covenant.MockPlutus (
     PlutusTerm,
     constrData,
     listData,
     pApp,
-    pCase,
     pConstr,
-    pFst,
-    pHead,
     pLam,
-    pSnd,
-    pTail,
     pVar,
     plutus_I,
-    unConstrData,
-    unIData,
-    unListData,
  )
-import Covenant.Test (Id (UnsafeMkId))
 import Data.Foldable (
-    find,
     foldl',
-    traverse_,
  )
-import Data.Kind (Type)
-import Data.Maybe (fromJust, mapMaybe)
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Void (Void, vacuous)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Debug.Trace
-import Optics.Core (ix, preview, review, view, (%))
-import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import Optics.Core (view)
 
 import Covenant.Transform.Common
 
@@ -85,7 +41,7 @@ import Covenant.Transform.Common
 mkConstructorFunctions :: TyName -> AppTransformM (Vector TyFixerFnData)
 mkConstructorFunctions tn =
     lookupDatatypeInfo tn >>= \dtInfo -> case view #originalDecl dtInfo of
-        DataDeclaration tn cnt ctors enc -> do
+        DataDeclaration _tn cnt ctors enc -> do
             Vector.ifoldM (go dtInfo cnt enc) Vector.empty ctors
         OpaqueData{} -> error "TODO: intro forms for opaque"
   where
@@ -97,7 +53,7 @@ mkConstructorFunctions tn =
         Int ->
         Constructor AbstractTy ->
         AppTransformM (Vector TyFixerFnData)
-    go dtInfo cnt enc acc cIx (Constructor (ConstructorName cName) argTys) = do
+    go _dtInfo cnt enc acc cIx (Constructor (ConstructorName cName) argTys) = do
         let ctorFnTy = mkCtorFnTy cnt argTys
             schema = mkTypeSchema enc ctorFnTy
             funName = cName
@@ -135,7 +91,7 @@ mkConstructorFunctions tn =
                 lamBuilder = foldl' (\g argN -> g . pLam argN) id names
             case schema of
                 SOPSchema _ -> pure . lamBuilder $ pConstr (fromIntegral ctorIx) (pVar <$> ctorArgNames)
-                DataSchema (CompN _ (ArgsAndResult introFnArgs _)) handlerArgPosDict -> do
+                DataSchema _ handlerArgPosDict -> do
                     {- We need to resolve embeddings for both type variables *and* statically known concrete builtin types.
                     -}
                     let resolveEmbedding :: ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)

@@ -1,0 +1,191 @@
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE StrictData #-}
+
+module Covenant.Transform.Pipeline.ElimTyFixers where
+
+import Data.Map qualified as M
+
+import Data.Set qualified as S
+import Data.Vector qualified as Vector
+
+
+import Covenant.ASG (
+    ASGNode (ACompNode, AValNode, AnError),
+    ASGNodeType (ValNodeType),
+    CompNodeInfo (Force, Lam),
+    Ref (AnArg, AnId),
+    ValNodeInfo (App, Cata, DataConstructor, Match, Thunk, Lit),
+    typeASGNode,
+ )
+import Covenant.Type (
+    AbstractTy,
+    CompT,
+    Constructor (Constructor),
+    ConstructorName (ConstructorName),
+    DataDeclaration (DataDeclaration, OpaqueData),
+    PlutusDataConstructor (..),
+    ValT (Datatype), TyName,
+ )
+
+import Control.Monad.State.Strict (gets, modify')
+import Covenant.Test (Arg (UnsafeMkArg), ValNodeInfo (AppInternal))
+import Data.Foldable (
+    traverse_,
+ )
+import Optics.Core (view)
+
+
+import Covenant.ExtendedASG
+import Covenant.Transform.Common
+import Data.Row.Records qualified as R
+import Data.Set qualified as Set
+
+import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.TyUtils 
+{- Rewrites type fixer nodes into applications.
+
+   This also constructs and inserts dummy functions into the ASG
+-}
+transformTypeFixerNodes ::  MetaM TransformState ()
+transformTypeFixerNodes = do
+    topSrcNode <- fst <$> (eTopLevelSrcNode :: MetaM TransformState (ExtendedId, ASGNode))
+    go topSrcNode --  dtDict magicErr tyFixers
+  where
+    conjureFunction :: CompT AbstractTy -> MetaM TransformState ASGNode
+    conjureFunction compT = do
+        errId <- forgetExtendedId <$> gets (R..! #uniqueError)
+        pure $ syntheticLamNode (UniqueError errId) compT
+
+    resolveCtorIx :: TyName -> ConstructorName -> MetaM TransformState (Maybe Int)
+    resolveCtorIx tn cn = do
+        dtInfo <- (M.! tn) <$> gets (R..! #dtDict)
+        case view #originalDecl dtInfo of
+            OpaqueData _ ctors -> do
+                -- TODO/REVIEW: NEED TO CHECK THAT THIS NAMING IS CONSISTENT WITH ANYWHERE ELSE WE HANDLE THIS
+                let (ConstructorName inner) = cn
+                    mplutusDataCtor = case inner of
+                        "I" -> Just PlutusI
+                        "B" -> Just PlutusB
+                        "Constr" -> Just PlutusConstr
+                        "List" -> Just PlutusList
+                        "Map" -> Just PlutusMap
+                        _ -> Nothing
+                case mplutusDataCtor of
+                    Nothing -> pure Nothing
+                    Just plutusDataCtor ->
+                        pure $ Vector.findIndex (== plutusDataCtor) (Vector.fromList . Set.toList $ ctors)
+            DataDeclaration _ _ ctors _ -> pure $ Vector.findIndex (\(Constructor cNm' _) -> cNm' == cn) ctors
+
+    -- this should only be used in contexts where we must have a datatype (e.g. scrutinees in matches and catas, parts of generated functions)
+    unsafeDatatypeName :: ValT AbstractTy -> TyName
+    unsafeDatatypeName = \case
+        Datatype tn _ -> tn
+        other -> error $ "unsafeDatatypeName called on non-datatype ValT: " <> show other
+
+    -- only use this on things that have to be a value type (i.e. scrutinees)
+    unsafeRefType :: Ref -> MetaM TransformState (ValT AbstractTy)
+    unsafeRefType = \case
+        AnArg (UnsafeMkArg _ _ ty) -> pure ty
+        AnId i ->
+            eNodeAt i >>= \node -> case typeASGNode node of
+                ValNodeType ty -> pure ty
+                other -> error $ "UnsafeRefType called on an Id with a non-ValT type: " <> show other
+
+    alreadyVisited :: ExtendedId -> MetaM TransformState Bool
+    alreadyVisited i = S.member i <$> gets (R..! #visited)
+
+    insertAndMarkVisited :: ExtendedId -> ASGNode -> MetaM TransformState ()
+    insertAndMarkVisited eid node = do
+        eInsert eid node
+        oldVisited <- gets (R..! #visited)
+        modify' $ R.update #visited (S.insert eid oldVisited)
+
+    go :: ExtendedId -> MetaM TransformState ()
+    go i =
+        alreadyVisited i >>= \case
+            True -> pure ()
+            False ->
+                eNodeAt i >>= \case
+                    AnError -> pure ()
+                    ACompNode _compT compNode -> case compNode of
+                        Lam ref -> goRef ref
+                        Force ref -> goRef ref
+                        _ -> pure ()
+                    AValNode valT valNode -> case valNode of
+                        Lit _ -> pure ()
+                        Thunk child -> resolveExtended child >>= go
+                        App fn args _ _ -> do
+                            resolveExtended fn >>= go
+                            traverse_ goRef args
+                        Cata _cataT handlers arg -> do
+                            tyFixers <- gets (R..! #tyFixerData)
+                            tn <- unsafeDatatypeName <$> unsafeRefType arg
+                            case cataData =<< M.lookup tn tyFixers of
+                                Nothing ->
+                                    error $
+                                        "Fatal Error: No type fixer function data for catamorphisms on " <> show tn
+                                Just dat@(TyFixerFnData _nm _enc cataFnPolyTy _compiled _schema _fnName _) -> do
+                                    cataId <- tyFixerFnId
+                                    modify' $ mapField #tyFixers (M.insert (forgetExtendedId cataId) dat)
+                                    handlerTypes <- traverse unsafeRefType (Vector.toList handlers)
+                                    scrutTy <- unsafeRefType arg
+                                    let cataFnConcrete = applyArgs cataFnPolyTy (scrutTy : handlerTypes)
+                                        newValNode = AppInternal (forgetExtendedId i) (Vector.cons arg handlers) Vector.empty cataFnConcrete
+                                        newASGNode = AValNode valT newValNode
+                                    insertAndMarkVisited i newASGNode
+                                    -- NOTE: This is just a placeholder tagged with the polymorphic function type, which we need.
+                                    --       The body is a reference to a single error node that we track and will ignore/remove.
+                                    --       TODO: There's only one of these for each type so add a check to save us work if we already did it
+                                    syntheticCataFnNode <- conjureFunction cataFnPolyTy
+                                    insertAndMarkVisited cataId syntheticCataFnNode
+                            traverse_ goRef handlers
+                            goRef arg
+                        Match scrut handlers -> do
+                            matchId <- tyFixerFnId
+                            scrutTy <- unsafeRefType scrut
+                            handlerTypes <- traverse unsafeRefType $ Vector.toList handlers
+                            let tn = unsafeDatatypeName scrutTy
+                            tyFixers <- gets (R..! #tyFixerData)
+                            case matchData =<< M.lookup tn tyFixers of
+                                Nothing ->
+                                    error $
+                                        "Fatal Error: No type fixer function data for pattern matches on " <> show tn
+                                Just dat@(TyFixerFnData _nm _enc matchFnPolyTy _compiled _schema _fnName _) -> do
+                                    modify' $ mapField #tyFixers (M.insert (forgetExtendedId matchId) dat)
+                                    let matchFnConcrete = applyArgs matchFnPolyTy (scrutTy : handlerTypes)
+                                        newValNode = AppInternal (forgetExtendedId i) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
+                                        newASGNode = AValNode valT newValNode
+                                    insertAndMarkVisited i newASGNode
+                                    -- NOTE: See previous note
+                                    syntheticMatchFnNode <- conjureFunction matchFnPolyTy
+                                    insertAndMarkVisited matchId syntheticMatchFnNode
+                            traverse_ goRef handlers
+                            goRef scrut
+                        DataConstructor tn ctorName ctorArgs -> do
+                            argTys <- traverse unsafeRefType $ Vector.toList ctorArgs
+                            tyFixers <- gets (R..! #tyFixerData)
+                            case introData <$> M.lookup tn tyFixers of
+                                Nothing ->
+                                    error $
+                                        "Fatal Error: No type fixer function data for datatype introductions for type " <> show tn
+                                Just constrFunctions ->
+                                    resolveCtorIx tn ctorName >>= \case
+                                        Nothing -> error $ "Fatal Error: No data for constructor " <> show ctorName <> " found in type " <> show tn
+                                        Just ctorIx -> do
+                                            ctorFnId <- tyFixerFnId
+                                            let ctorFnData = constrFunctions Vector.! ctorIx
+                                                dat@(TyFixerFnData _nm _enc ctorFnPolyTy _compiled _schema _fnName _) = ctorFnData
+                                                ctorFnConcrete = applyArgs ctorFnPolyTy argTys
+                                                newValNode = AppInternal (forgetExtendedId i) ctorArgs Vector.empty ctorFnConcrete
+                                                newASGNode = AValNode valT newValNode
+                                            modify' $ mapField #tyFixers (M.insert (forgetExtendedId ctorFnId) dat)
+                                            insertAndMarkVisited i newASGNode
+                                            -- NOTE: See previous note
+                                            syntheticCtorFnNode <- conjureFunction ctorFnPolyTy
+                                            insertAndMarkVisited ctorFnId syntheticCtorFnNode
+                            traverse_ goRef ctorArgs
+      where
+        goRef :: Ref -> MetaM TransformState ()
+        goRef = \case
+            AnId child -> resolveExtended child >>= go
+            AnArg{} -> pure ()

@@ -1,88 +1,44 @@
 {- HLINT ignore "Use if" -}
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Covenant.Transform.Cata where
 
-import Data.Map (Map)
-import Data.Map qualified as M
 
-import Data.Set (Set)
-import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
 
-import Covenant.ASG (
-    ASG,
-    ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
-    Id,
-    Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
-    topLevelId,
- )
 import Covenant.Type (
     AbstractTy (BoundAt),
-    BuiltinFlatT,
-    CompT (Comp0, CompN),
-    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
     Constructor (Constructor),
-    ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding (BuiltinStrategy, PlutusData, SOP),
-    PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
+    DataEncoding,
     TyName (TyName),
-    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
-    tyvar,
+    ValT (Abstraction, Datatype, ThunkT),
  )
 
-import Control.Applicative (Alternative ((<|>)))
-import Control.Monad (join)
 import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (MonadReader, Reader, runReader)
-import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.ArgDict (idToName)
-import Covenant.Data (DatatypeInfo, mkCataFunTy, mkMatchFunTy)
-import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
-import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
+import Covenant.Data (DatatypeInfo, mkCataFunTy)
+import Covenant.DeBruijn (DeBruijn (S))
+import Covenant.Index (Count, intCount, intIndex)
 import Covenant.MockPlutus (
     PlutusTerm,
-    constrData,
-    listData,
     pApp,
     pCase,
-    pConstr,
-    pFst,
-    pHead,
     pLam,
-    pSnd,
-    pTail,
     pVar,
-    plutus_I,
-    unConstrData,
-    unIData,
-    unListData,
  )
-import Covenant.Test (Id (UnsafeMkId))
 import Data.Foldable (
-    find,
     foldl',
-    traverse_,
  )
-import Data.Kind (Type)
-import Data.Maybe (fromJust, mapMaybe)
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void, vacuous)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Debug.Trace
-import Optics.Core (ix, preview, review, view, (%))
-import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import Optics.Core (preview, review, view)
 
 import Covenant.Transform.Common
 
@@ -136,7 +92,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         TypeSchema ->
         AppTransformM PlutusTerm
     -- \* TODO/FIXME: We really need to check whether it has a builtin encoding first and process that separately. Most of what we do here isn't useful for those.
-    genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase enc schema = do
+    genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase _enc schema = do
         {- NOTE: This is a bit different than the other cases. Here, a cata function will have a type like:
                    `forall a r. List a -> r -> (a -> r -> r) -> r` (ignoring the extra handler arguments that come at the end)
                  But the function we are actually generating also takes a recursive "self" argument
@@ -280,7 +236,7 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
                     else argTerm
         -- Since this is the SOP generator, all we need to do now is to return the wrapped lambda handler for this arm.
         pure . lamBuilder $ foldl' pApp armHandlerTerm lamArgsWithSelfCalls
-    anythingElse ->
+    _anythingElse ->
         -- Anything other than a thunk means we're working with a 0 argument constructor and so cannot do anything except
         -- return the handler itself.
         pure armHandlerTerm
@@ -292,6 +248,7 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
 
     isR :: ValT AbstractTy -> Bool
     isR (Abstraction (BoundAt _ indx)) = indx == rIndex
+    isR _ = False 
 
 {- Strictly we don't need this, we could just examine every ASG node and check whether
    a catamorphism for the type we're concerned with is used, or we could drive this process by
@@ -300,7 +257,7 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
 -}
 isRecursiveDatatype :: DataDeclaration AbstractTy -> Bool
 isRecursiveDatatype OpaqueData{} = False
-isRecursiveDatatype (DataDeclaration tn cnt ctors enc) = any check ctors
+isRecursiveDatatype (DataDeclaration tn cnt ctors _enc) = any check ctors
   where
     tyVarArgs :: Vector (ValT AbstractTy)
     tyVarArgs = countToTyVars cnt

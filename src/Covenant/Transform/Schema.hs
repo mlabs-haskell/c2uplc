@@ -1,88 +1,30 @@
 {- HLINT ignore "Use if" -}
 {-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
-{-# LANGUAGE ViewPatterns #-}
-
 module Covenant.Transform.Schema where
 
 import Data.Map (Map)
 import Data.Map qualified as M
 
-import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
 
-import Covenant.ASG (
-    ASG,
-    ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
-    Id,
-    Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
-    topLevelId,
- )
 import Covenant.Type (
     AbstractTy (BoundAt),
-    BuiltinFlatT,
     CompT (Comp0, CompN),
     CompTBody (ArgsAndResult, ReturnT, (:--:>)),
-    Constructor (Constructor),
-    ConstructorName (ConstructorName),
-    DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding (BuiltinStrategy, PlutusData, SOP),
-    PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
-    TyName (TyName),
+    DataEncoding (SOP),
     ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
     tyvar,
  )
 
-import Control.Applicative (Alternative ((<|>)))
-import Control.Monad (join)
-import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (MonadReader, Reader, runReader)
-import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.ArgDict (idToName)
-import Covenant.Data (DatatypeInfo, mkCataFunTy, mkMatchFunTy)
-import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
-import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
-import Covenant.MockPlutus (
-    PlutusTerm,
-    constrData,
-    listData,
-    pApp,
-    pCase,
-    pConstr,
-    pFst,
-    pHead,
-    pLam,
-    pSnd,
-    pTail,
-    pVar,
-    plutus_I,
-    unConstrData,
-    unIData,
-    unListData,
- )
-import Covenant.Test (Id (UnsafeMkId))
+import Covenant.DeBruijn (DeBruijn (S, Z))
+import Covenant.Index (Index)
 import Data.Foldable (
-    find,
     foldl',
-    traverse_,
  )
-import Data.Kind (Type)
-import Data.Maybe (fromJust, mapMaybe)
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Void (Void, vacuous)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Debug.Trace
-import Optics.Core (ix, preview, review, view, (%))
-import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
 {- This module contains functions (and types) for resolving the argument position of "extra handler args".
 
@@ -185,8 +127,8 @@ mkTypeSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataE
                                  in ThunkT (Comp0 $ tv :--:> ReturnT tv)
                          in -- There HAS to be a less convoluted way to write this, ugh. State monad?
                             foldl'
-                                ( \(pos, handlerDict, eArgs) tv ->
-                                    let newHandlerDict = M.insert tv (pos + lenOrigArgs) handlerDict
+                                ( \(pos, hDict, eArgs) tv ->
+                                    let newHandlerDict = M.insert tv (pos + lenOrigArgs) hDict
                                         newPos = pos + 1
                                         handler = mkProjEmbedHandlerArg tv
                                         newExtraArgs = Vector.snoc eArgs handler
@@ -210,9 +152,9 @@ mkTypeSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataE
     collectIndices :: ValT AbstractTy -> [Index "tyvar"]
     collectIndices = \case
         Abstraction (BoundAt _ indx) -> [indx]
-        ThunkT (CompN _ (ArgsAndResult args _)) -> concatMap collectIndices $ Vector.toList args
+        ThunkT (CompN _ (ArgsAndResult args' _)) -> concatMap collectIndices $ Vector.toList args'
         BuiltinFlat _ -> []
-        Datatype _ args -> concatMap collectIndices $ Vector.toList args
+        Datatype _ args' -> concatMap collectIndices $ Vector.toList args'
 
 {-
 -- TODO/REVIEW: Maybe this needs to run in a reader to track DB levels?

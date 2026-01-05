@@ -63,12 +63,7 @@ import Debug.Trace
 import Optics.Core (ix, preview, review, view, (%))
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
-newtype LambdaId = LambdaId {_getLamId :: Id}
-    deriving newtype (Show, Eq, Ord)
-
-newtype AppId = AppId {_getAppId :: Id}
-    deriving newtype (Show, Eq, Ord)
-
+{-
 -- Constructs all the intermediate resources and then determines the full range of concretifications for every lambda/call site in the ASG
 tyVarConcretifications :: ASG -> Map LambdaId (Map AppId (Set (Map AbstractTy (ValT Void))))
 tyVarConcretifications asg = trace msg $ M.fromSet (snd . getTyVarConcretifications asg asgCallChains asgCallSites asgCallSiteChains) <$> asgCallSites
@@ -195,8 +190,7 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
                 --              What we want out of this is something like "every possible union of all of those singleton maps such that every map has
                 --              an entry for every rigid".
                 resolvedRigids = resolveRigid <$> S.toList rigids
-             in -- REVIEW: We need to tag the results with `fnTy` for recursive calls. I think? ugh
-                trace (show resolvedRigids) $ (fnTy,) . S.fromList . combine $ resolvedRigids
+             in trace (show resolvedRigids) $ (fnTy,) . S.fromList . combine $ resolvedRigids
         Just _ ->
             -- This has to be empty. If the application site is fully concretified, there are no rigids, and there's nothing we can do.
             (fnTy, S.empty)
@@ -295,79 +289,10 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
             -- We already did the work in `concretifies`, we just return a singleton list of a singleton map w/ the instantiation
             Here concreteResult -> [M.singleton rigid concreteResult]
 
--- 'getInstantiations' but works on the types we actually need
-instantiationHelper ::
-    forall (a :: Type).
-    (CompT a -> CompT AbstractTy) -> -- need to pass this in so we can use this on CompT Voids
-    AbstractTy -> -- the tyvar
-    CompT a -> -- The more concrete type. Might be CompT Void if we KNOW it's concrete
-    CompT AbstractTy -> -- The more polymorphic type.
-    Maybe (ValT AbstractTy)
-instantiationHelper f var concrete poly = M.lookup var $ runReader (getInstantiations [var] poly' concrete') 0
-  where
-    concrete' = Vector.toList . compTArgSchema $ f concrete
-    poly' = Vector.toList . compTArgSchema $ poly
 
--- Given a list of variables, one list of types representing the function type (minus the result, we don't care about it i think),
--- and a second list of types representing the arguments to which it is applied, determine all the instantiations
--- I know we hate lists but it seems really silly to do this w/ vectors...
-getInstantiations :: [AbstractTy] -> [ValT AbstractTy] -> [ValT AbstractTy] -> Reader Int (Map AbstractTy (ValT AbstractTy))
-getInstantiations [] _ _ = pure M.empty
-getInstantiations _ [] _ = pure M.empty
-getInstantiations _ _ [] = pure M.empty
-getInstantiations (var : vars) fs@(fE : fEs) as@(aE : aEs) =
-    instantiates var aE fE >>= \case
-        Nothing -> (<>) <$> getInstantiations [var] fEs aEs <*> getInstantiations vars fs as
-        Just t -> M.insert var t <$> getInstantiations vars fs as
 
-instantiates ::
-    AbstractTy ->
-    ValT AbstractTy -> -- the "more concrete type", usually the actual argument from 'app'
-    ValT AbstractTy -> -- the "more polymorphic type', usually from the fn definition
-    Reader Int (Maybe (ValT AbstractTy))
-instantiates var concrete abstract = case (concrete, abstract) of
-    (x, Abstraction a) ->
-        sameVar var a >>= \case
-            True -> pure $ Just x
-            False -> pure Nothing
-    (ThunkT (CompN _ concreteFn), ThunkT (CompN _ abstractFn)) ->
-        let concreteFn' = Vector.toList $ compTBodyToVec concreteFn
-            abstractFn' = Vector.toList $ compTBodyToVec abstractFn
-         in local (+ 1) $ go concreteFn' abstractFn'
-    (Datatype tnC argsC, Datatype tnA argsA)
-        | tnC == tnA -> go (Vector.toList argsC) (Vector.toList argsA)
-    _ -> pure Nothing
-  where
-    -- second arg gets adjusted here, not first
-    -- I THINK we need to do this?
-    sameVar :: AbstractTy -> AbstractTy -> Reader Int Bool
-    sameVar varA varB = do
-        varB' <- resolveVar varB
-        pure $ varA == varB'
 
-    go :: [ValT AbstractTy] -> [ValT AbstractTy] -> Reader Int (Maybe (ValT AbstractTy))
-    go [] _ = pure Nothing
-    go _ [] = pure Nothing
-    go (c : cs) (a : as) = (<|>) <$> instantiates var c a <*> go cs as
 
-resolveVar :: AbstractTy -> Reader Int AbstractTy
-resolveVar (BoundAt db ix) = do
-    offset <- ask
-    let db' = fromJust . preview asInt $ review asInt db - offset
-    pure $ BoundAt db' ix
-
-decideConcreteCompT :: CompT AbstractTy -> Maybe (CompT Void)
-decideConcreteCompT (CompN cnt body) =
-    fmap (compN cnt . vecToCompTBody) . traverse decideConcrete . compTBodyToVec $ body
-
-decideConcrete :: ValT AbstractTy -> Maybe (ValT Void)
-decideConcrete = \case
-    Abstraction _ -> Nothing
-    ThunkT (CompN cnt body) -> do
-        body' <- traverse decideConcrete $ compTBodyToVec body
-        pure . ThunkT . compN cnt $ vecToCompTBody body'
-    BuiltinFlat biTy -> Just (BuiltinFlat biTy)
-    Datatype tn args -> Datatype tn <$> traverse decideConcrete args
 
 -- We need to collect all of the child ASGs for each lambda. We do this all in one pass, so the
 -- second arg is still the top level id of the main ASG. The outer keys of the map are lambda node IDs and the
@@ -466,7 +391,8 @@ getCallSiteChainMap asg i callsites = case nodeAt i asg of
          doing it this way seemed likely to reduce the possibility for mistakes.
 -}
 
--- The Set IS NOT AN ORDERED LIST OF HIERARCHICAL CALLSITES, it is instead an exhaustive set of possibile concretifications of the key lambda
+-- The Set IS NOT AN ORDERED LIST OF HIERARCHICAL CALLSITES, it is instead an exhaustive set
+-- of possibile concretifications of the key lambda
 -- in every "upwards" call site that might concretify a tyvar differently
 getCallChain :: ASG -> Id -> Map LambdaId (Set LambdaId) -- it should be a NonEmpty but I just want to get the logic right for now
 getCallChain asg i = foldl' go M.empty raw
@@ -580,7 +506,7 @@ getCallSites lambdas asg i = case nodeAt i asg of
                 let here = M.singleton (LambdaId fn) (S.singleton $ AppId i)
                     fromFn = getCallSites lambdas asg fn
                     fromArgs = M.unionsWith (<>) . map goRef . Vector.toList $ args
-                 in M.unionsWith (<>) ([here, fromFn, fromArgs] :: [(Map LambdaId (Set AppId))])
+                 in M.unionsWith (<>) ([here, fromFn, fromArgs] :: [Map LambdaId (Set AppId)])
         Thunk child -> getCallSites lambdas asg child
         Cata ty handlers arg -> M.unionsWith (<>) (goRef <$> (arg : Vector.toList handlers))
         DataConstructor _tn _cn args -> M.unionsWith (<>) (goRef <$> args)
@@ -621,54 +547,11 @@ vFoldMap :: forall (a :: Type) (k :: Type) (v :: Type). (Ord k, Monoid v) => (a 
 vFoldMap f = Vector.foldl' (\acc x -> M.unionWith (<>) acc (f x)) mempty
 
 -- this is really fucking stupid but I don't have the time to do something better
-compTBodyToVec :: forall a. CompTBody a -> Vector (ValT a)
-compTBodyToVec (ArgsAndResult args res) = Vector.snoc args res
 
-vecToCompTBody :: forall a. Vector (ValT a) -> CompTBody a
-vecToCompTBody vec = case Vector.unsnoc vec of
-    Just (args, res)
-        | Vector.null args -> ReturnT res -- might not need this?
-        | otherwise -> ArgsAndResult args res
-    Nothing -> error "empty CompT"
 
-compN :: Count "tyvar" -> CompTBody a -> CompT a
-compN = CompN
 
-compTBody :: CompT a -> CompTBody a
-compTBody (CompN _ body) = body
 
-compTArgSchema :: CompT a -> Vector (ValT a)
-compTArgSchema t = case compTBody t of
-    ArgsAndResult args _ -> args
 
-substCompT ::
-    forall (a :: Type).
-    (ValT a -> ValT AbstractTy) ->
-    Map AbstractTy (ValT a) ->
-    CompT AbstractTy ->
-    CompT AbstractTy
-substCompT f dict (CompN cnt (compTBodyToVec -> bodyVec)) = CompN cnt (vecToCompTBody subbed) -- NOTE: COUNT WILL BE WRONG (I don't think it matters)
-  where
-    subbed = (\vt -> runReader (substitute f dict vt) 0) <$> bodyVec
-
--- the extra function arg lets this work with either AbstractTy or Void (which might be useful for us)
-substitute ::
-    forall (a :: Type).
-    (ValT a -> ValT AbstractTy) ->
-    Map AbstractTy (ValT a) ->
-    ValT AbstractTy ->
-    Reader Int (ValT AbstractTy)
-substitute f dict = \case
-    Abstraction a ->
-        resolveVar a >>= \a' -> case M.lookup a' dict of
-            Nothing -> pure $ Abstraction a
-            Just t -> pure (f t)
-    ThunkT (CompN cnt concreteFn) -> do
-        let bodyAsVec = compTBodyToVec concreteFn
-        subbedBody <- local (+ 1) $ traverse (substitute f dict) bodyAsVec
-        pure . ThunkT . CompN cnt $ vecToCompTBody subbedBody
-    Datatype tn args -> Datatype tn <$> traverse (substitute f dict) args
-    other -> pure other
 
 -- "unsafe" way to retrieve the original (i.e. possibly polymorphic) lambda type
 lambdaTy :: ASG -> LambdaId -> CompT AbstractTy
@@ -715,24 +598,4 @@ combine (xs : xss) = go xs xss
         let as' = (<>) <$> as <*> ys
          in go as' yss
 
-countToTyVars :: Count "tyvar" -> Vector (ValT AbstractTy)
-countToTyVars cnt
-    | cntI == 0 = mempty
-    | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
-  where
-    cntI :: Int
-    cntI = review intCount cnt
-
-    mkTV :: Int -> ValT AbstractTy
-    mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
-
-countToAbstractions :: Count "tyvar" -> Vector AbstractTy
-countToAbstractions cnt
-    | cntI == 0 = mempty
-    | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
-  where
-    cntI :: Int
-    cntI = review intCount cnt
-
-    mkTV :: Int -> AbstractTy
-    mkTV =  BoundAt Z . fromJust . preview intIndex
+-}

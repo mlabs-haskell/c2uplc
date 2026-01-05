@@ -23,7 +23,6 @@ extra-source-files:
 common lang
   ghc-options:
     -Wredundant-strictness-flags -Wmissing-deriving-strategies
-
   -- -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
   -- -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
   -- -Wmissing-import-lists
@@ -109,11 +108,17 @@ library
     Covenant.Concretify
     Covenant.ExtendedASG
     Covenant.Transform
+    Covenant.Transform.Pipeline.Common
+    Covenant.Transform.Pipeline.FirstPass
+    Covenant.Transform.Pipeline.ElimTyFixers
+    Covenant.Transform.Pipeline.MkTyFixerFnData
+    Covenant.Transform.Pipeline.ResolveRepPoly
     Covenant.Transform.Cata
     Covenant.Transform.Common
     Covenant.Transform.Elim
     Covenant.Transform.Intro
     Covenant.Transform.Schema
+    Covenant.Transform.TyUtils
 
   other-modules:   Covenant.MockPlutus
   hs-source-dirs:  src

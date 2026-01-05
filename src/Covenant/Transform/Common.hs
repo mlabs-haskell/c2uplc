@@ -38,61 +38,39 @@ module Covenant.Transform.Common (
 import Data.Map (Map)
 import Data.Map qualified as M
 
-import Data.Set (Set)
-import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (MonadState (put), RWS, ask, asks, execRWS, local, modify, runRWS)
+import Control.Monad.RWS.Strict (MonadState (put), RWS, ask, runRWS)
 
 import Covenant.ASG (
-    ASG,
-    ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
     Id,
-    Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
-    topLevelId,
  )
 import Covenant.Type (
     AbstractTy (BoundAt),
     BuiltinFlatT,
-    CompT (Comp0, CompN),
-    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
-    Constructor (Constructor),
-    ConstructorName (ConstructorName),
-    DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding (BuiltinStrategy, PlutusData, SOP),
-    PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
+    DataEncoding,
     TyName (TyName),
-    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
-    tyvar,
+    ValT (Abstraction, BuiltinFlat, ThunkT),
  )
 
-import Control.Applicative (Alternative ((<|>)))
-import Control.Monad (join)
-import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (MonadReader, Reader, runReader)
-import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.Data (DatatypeInfo, mkCataFunTy, mkMatchFunTy)
-import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
-import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
+import Control.Monad.Reader (MonadReader)
+import Control.Monad.State.Strict (MonadState (get))
+import Covenant.Data (DatatypeInfo)
+import Covenant.DeBruijn (DeBruijn (Z))
+import Covenant.Index (Count, Index, intCount, intIndex)
 
 import Covenant.Test (Id (UnsafeMkId))
 import Data.Foldable (
-    find,
     foldl',
-    traverse_,
  )
 import Data.Kind (Type)
-import Data.Maybe (fromJust, mapMaybe)
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void, vacuous)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Debug.Trace
-import Optics.Core (ix, preview, review, view, (%))
+import Optics.Core (preview, review)
 import PlutusCore.Name.Unique (
     Name (Name),
     Unique (Unique),
@@ -102,21 +80,13 @@ import Covenant.ArgDict (idToName)
 import Covenant.ExtendedASG
 import Covenant.MockPlutus (
     PlutusTerm,
-    constrData,
-    listData,
     pApp,
     pCase,
-    pConstr,
     pFst,
-    pHead,
     pLam,
     pSnd,
-    pTail,
     pVar,
-    plutus_I,
     unConstrData,
-    unIData,
-    unListData,
  )
 import Covenant.Transform.Schema
 
@@ -274,23 +244,23 @@ data TyFixerDataBundle
 
 freshName :: AppTransformM Name
 freshName = do
-    newId@(UnsafeMkId w) <- nextId
+    UnsafeMkId w <- nextId
     let textPart = "var_" <> T.pack (show w)
         asName = Name textPart (Unique $ fromIntegral w)
     pure asName
 
 freshNamePrefix :: Text -> AppTransformM Name
 freshNamePrefix nameBase = do
-    newId@(UnsafeMkId w) <- nextId
+    UnsafeMkId w <- nextId
     let textPart = nameBase <> "_" <> T.pack (show w)
     pure $ Name textPart (Unique $ fromIntegral w)
 
 genLambdaArgNames :: forall (a :: Type). Text -> Vector a -> AppTransformM (Vector Name)
 genLambdaArgNames nameBase = Vector.imapM genTermVarName
   where
-    genTermVarName :: forall a. Int -> a -> AppTransformM Name
+    genTermVarName ::  Int -> a -> AppTransformM Name
     genTermVarName pos _ = do
-        uniqueId@(UnsafeMkId i) <- nextId
+        UnsafeMkId i <- nextId
         let textPart = nameBase <> "_arg" <> T.pack (show pos)
             uniquePart = Unique (fromIntegral i)
         pure $ Name textPart uniquePart
@@ -369,7 +339,7 @@ pCaseListWith [] _ withElems _ = withElems [] -- only thing we can do
 pCaseListWith (x : xs) withHead withElems aList = go [] aList x xs
   where
     go :: [PlutusTerm] -> PlutusTerm -> a -> [a] -> AppTransformM PlutusTerm
-    go termAcc remList t [] = pCaseList remList $ \y ys -> do
+    go termAcc remList t [] = pCaseList remList $ \y _ys -> do
         yTerm <- withHead t y
         let args = termAcc <> [yTerm]
         withElems args
