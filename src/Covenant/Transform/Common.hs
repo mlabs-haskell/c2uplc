@@ -267,7 +267,10 @@ data TyFixerNodeKind = MatchNode | IntroNode | CataNode
 
 -}
 data TyFixerDataBundle
-    = TyFixerDataBundle {introData :: Vector TyFixerFnData, matchData :: Maybe TyFixerFnData, cataData :: Maybe TyFixerFnData}
+    = TyFixerDataBundle {introData :: Vector TyFixerFnData,
+                         matchData :: Maybe TyFixerFnData,
+                         cataData :: Maybe TyFixerFnData
+                        }
 
 freshName :: AppTransformM Name
 freshName = do
