@@ -23,6 +23,7 @@ extra-source-files:
 common lang
   ghc-options:
     -Wredundant-strictness-flags -Wmissing-deriving-strategies
+
   -- -Woperator-whitespace -Wambiguous-fields -Wmisplaced-pragmas -Wall
   -- -Wcompat -Wredundant-bang-patterns -Wmissing-export-lists
   -- -Wmissing-import-lists
@@ -65,6 +66,7 @@ common lang
     , nonempty-vector
     , optics-core
     , optics-extra
+    , prettyprinter
     , row-types
     , smash
     , text
@@ -107,20 +109,20 @@ library
     Covenant.CodeGen
     Covenant.Concretify
     Covenant.ExtendedASG
+    Covenant.MockPlutus
     Covenant.Transform
-    Covenant.Transform.Pipeline.Common
-    Covenant.Transform.Pipeline.FirstPass
-    Covenant.Transform.Pipeline.ElimTyFixers
-    Covenant.Transform.Pipeline.MkTyFixerFnData
-    Covenant.Transform.Pipeline.ResolveRepPoly
     Covenant.Transform.Cata
     Covenant.Transform.Common
     Covenant.Transform.Elim
     Covenant.Transform.Intro
+    Covenant.Transform.Pipeline.Common
+    Covenant.Transform.Pipeline.ElimTyFixers
+    Covenant.Transform.Pipeline.FirstPass
+    Covenant.Transform.Pipeline.MkTyFixerFnData
+    Covenant.Transform.Pipeline.ResolveRepPoly
     Covenant.Transform.Schema
     Covenant.Transform.TyUtils
 
-  other-modules:   Covenant.MockPlutus
   hs-source-dirs:  src
   build-depends:   plutus-core ==1.51.0.0
 
@@ -136,4 +138,11 @@ test-suite concretification
   type:           exitcode-stdio-1.0
   main-is:        Main.hs
   hs-source-dirs: test/concretification
+  build-depends:  plutus-core ==1.51.0.0
+
+test-suite compilation
+  import:         test-lang
+  type:           exitcode-stdio-1.0
+  main-is:        Main.hs
+  hs-source-dirs: test/compilation
   build-depends:  plutus-core ==1.51.0.0

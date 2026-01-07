@@ -4,7 +4,6 @@
 
 module Covenant.Transform.Pipeline.Common where
 
-
 import Data.Map (Map)
 
 import Data.Set (Set)
@@ -21,7 +20,8 @@ import Covenant.Type (
     AbstractTy,
     BuiltinFlatT,
     CompT,
-    ValT, TyName,
+    TyName,
+    ValT,
  )
 
 import Control.Monad.State.Strict (MonadState (get), State, gets, modify', runState)
@@ -31,39 +31,30 @@ import Covenant.Test (CompNodeInfo (LamInternal))
 import Data.Kind (Type)
 import Data.Void (Void)
 
-
-import Covenant.Transform.TyUtils  (LambdaId (LambdaId), AppId)
 import Covenant.ExtendedASG
+import Covenant.MockPlutus (PlutusTerm)
 import Covenant.Transform.Common
+import Covenant.Transform.TyUtils (AppId, LambdaId (LambdaId))
 import Data.Row.Records (HasType, Rec, Row, type (.+), type (.==))
 import Data.Row.Records qualified as R
-import GHC.TypeLits ( Symbol, KnownSymbol )
+import GHC.TypeLits (KnownSymbol, Symbol)
 
-{- We need to keep track of:
-     1. SOMETHING that serves the role of a Context of rigid concretifications along our path.
-        So, a (Map AppId (Map (Index "tyvar") (ValT Void))) should work. I think?
-     2. The "path" we're on. I think we really only need three things here:
-          a. The "call site chain", so a Vector AppId
-          b. A stack of lambdas above us
+type PipelineData =
+    TransformState
+        .+ "handlerStubs" .== Map Id PlutusTerm
 
-     We also need to read from our TyFixer Map (and should probably construct a reverse lookup table
-     to be able to lookup by Id there to avoid a ton of duplicated and superfluous type level surgery)
+type ConcretifyCxt =
+    "context" .== Map AppId (Map (Index "tyvar") (ValT Void))
+        .+ "callPath" .== Vector LambdaId
+        .+ "appPath" .== Vector AppId
+        .+ "tyFixers" .== Map Id TyFixerFnData
+        .+ "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
+        .+ "identityFn" .== ExtendedId
+        .+ "uniqueError" .== ExtendedId
 
--}
--- temporarily enabling purescript mode, it's much easier to prototype and iterate w/ extensible
--- records
-type ConcretifyCxt = "context" .== Map AppId (Map (Index "tyvar") (ValT Void))
-                     .+ "callPath" .== Vector LambdaId
-                     .+ "appPath" .== Vector AppId
-                     .+ "tyFixers" .== Map Id TyFixerFnData
-                     .+ "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
-                     .+ "identityFn" .== ExtendedId
-                     .+ "uniqueError" .== ExtendedId
-
-instance Monoid w => MonadASG (RWS r w ExtendedASG) where
-  getASG = get
-  putASG = put
-
+instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
+    getASG = get
+    putASG = put
 
 -- Row type synonyms for our various states
 type FirstPassMeta =
@@ -79,24 +70,24 @@ type TransformState =
         .+ "tyFixerData" .== Map TyName TyFixerDataBundle
         .+ "tyFixers" .== Map Id TyFixerFnData
 
-
 -- Just to help me keep straight all of the various IDs we need to keep track of
 -- (i will mess up less if i have to construct this)
 newtype UniqueError = UniqueError Id
 
-eLambdaTy :: forall m. MonadASG m => LambdaId -> m (CompT AbstractTy)
-eLambdaTy (LambdaId l) = eNodeAt l >>= \case
-    ACompNode compT _ -> pure compT
-    _other -> error "Lambda id points at non-comp-node"
+eLambdaTy :: forall m. (MonadASG m) => LambdaId -> m (CompT AbstractTy)
+eLambdaTy (LambdaId l) =
+    eNodeAt l >>= \case
+        ACompNode compT _ -> pure compT
+        _other -> error "Lambda id points at non-comp-node"
 
-mapField :: forall (l :: Symbol) (a :: Type) (r :: Row Type)
-        . (KnownSymbol l, HasType l a r)
-       => R.Label l
-       -> (a -> a)
-       -> Rec r
-       -> Rec r
+mapField ::
+    forall (l :: Symbol) (a :: Type) (r :: Row Type).
+    (KnownSymbol l, HasType l a r) =>
+    R.Label l ->
+    (a -> a) ->
+    Rec r ->
+    Rec r
 mapField l f r = R.update l (f (r R..! l)) r
-
 
 -- I didn't bill for the row stuff, I just got frustrated having to rewrite optics over and over again
 -- as I iterated heavily on this module and used this out for convenience while experimenting. I can remove it all later.
@@ -114,7 +105,7 @@ unliftMetaM r act = do
     putASG (rOut R..! #asg)
     pure (a, rOut)
 
--- I dunno what the point of this was 
+-- I dunno what the point of this was
 newtype MetaM r a = MetaM (State (Rec r) a)
     deriving
         ( Functor

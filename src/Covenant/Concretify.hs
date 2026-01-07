@@ -50,7 +50,6 @@ import Control.Monad.State.Strict (MonadState (get), StateT)
 import Covenant.Data (DatatypeInfo, mkMatchFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
 import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
-import Covenant.MockPlutus (PlutusTerm, constrData, listData, pApp, pLam, pVar, plutus_I)
 import Covenant.Test (Id (UnsafeMkId))
 import Data.Foldable (find, foldl', traverse_)
 import Data.Kind (Type)
@@ -288,11 +287,6 @@ getTyVarConcretifications asg callChains callSites callSiteChains appId@(AppId i
                     M.singleton rigid <$> concretificationsForThisRigid
             -- We already did the work in `concretifies`, we just return a singleton list of a singleton map w/ the instantiation
             Here concreteResult -> [M.singleton rigid concreteResult]
-
-
-
-
-
 
 -- We need to collect all of the child ASGs for each lambda. We do this all in one pass, so the
 -- second arg is still the top level id of the main ASG. The outer keys of the map are lambda node IDs and the
@@ -547,11 +541,6 @@ vFoldMap :: forall (a :: Type) (k :: Type) (v :: Type). (Ord k, Monoid v) => (a 
 vFoldMap f = Vector.foldl' (\acc x -> M.unionWith (<>) acc (f x)) mempty
 
 -- this is really fucking stupid but I don't have the time to do something better
-
-
-
-
-
 
 -- "unsafe" way to retrieve the original (i.e. possibly polymorphic) lambda type
 lambdaTy :: ASG -> LambdaId -> CompT AbstractTy

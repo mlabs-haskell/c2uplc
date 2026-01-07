@@ -27,15 +27,17 @@ import Covenant.Type (
 import Control.Applicative (Alternative ((<|>)))
 import Control.Monad.Reader (Reader, runReader)
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
-import Covenant.Index (Count, intCount, intIndex)
+import Covenant.Index (Count, Index, intCount, intIndex)
 import Covenant.Test (Id (UnsafeMkId))
 import Data.Kind (Type)
 import Data.Maybe (fromJust, isJust)
 import Data.Void (Void)
 import Optics.Core (preview, review)
 
-
 import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Word (Word64)
+import UntypedPlutusCore (Name (Name), Unique (Unique))
 
 newtype LambdaId = LambdaId {_getLamId :: Id}
     deriving newtype (Show, Eq, Ord)
@@ -45,7 +47,28 @@ newtype AppId = AppId {_getAppId :: Id}
 
 -- Just saves us the hassle of having to runReader and local a bunch
 runSubst :: forall (a :: Type). Int -> (ValT a -> ValT AbstractTy) -> Map AbstractTy (ValT a) -> ValT AbstractTy -> ValT AbstractTy
-runSubst dbStart f subDict val = flip runReader dbStart $  substitute f subDict val
+runSubst dbStart f subDict val = flip runReader dbStart $ substitute f subDict val
+
+compTArgs :: CompT AbstractTy -> Int
+compTArgs = \case
+    CompN _ (ArgsAndResult args _) -> Vector.length args - 1
+
+compTVars :: CompT AbstractTy -> [AbstractTy]
+compTVars (CompN cnt _)
+    | numVars == 0 = []
+    | otherwise = map (BoundAt Z . unsafeIx) [0 .. (numVars - 1)]
+  where
+    numVars :: Int
+    numVars = review intCount cnt
+
+    unsafeIx :: Int -> Index "tyvar"
+    unsafeIx i = fromJust $ preview intIndex i
+
+idToWord :: Id -> Word64
+idToWord = toEnum . fromEnum
+
+idToName :: Id -> Name
+idToName i = Name ("x_" <> T.pack (show $ fromEnum i)) (Unique (fromEnum i))
 
 compTBodyToVec :: forall a. CompTBody a -> Vector (ValT a)
 compTBodyToVec (ArgsAndResult args res) = Vector.snoc args res
@@ -86,19 +109,19 @@ assertConcrete = fromJust . decideConcrete
 
 collectRigids :: CompT AbstractTy -> Set AbstractTy
 collectRigids =
-  mconcat
-      . Vector.toList
-      . fmap (flip runReader 0 . go)
-      . compTArgSchema
- where
-  go :: ValT AbstractTy -> Reader Int (Set AbstractTy)
-  go = \case
-      Abstraction x -> S.singleton <$> resolveVar x
-      ThunkT compT -> local (+ 1) $ do
-          let argSchema = compTArgSchema compT
-          mconcat <$> traverse go (Vector.toList argSchema)
-      BuiltinFlat{} -> pure S.empty
-      Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
+    mconcat
+        . Vector.toList
+        . fmap (flip runReader 0 . go)
+        . compTArgSchema
+  where
+    go :: ValT AbstractTy -> Reader Int (Set AbstractTy)
+    go = \case
+        Abstraction x -> S.singleton <$> resolveVar x
+        ThunkT compT -> local (+ 1) $ do
+            let argSchema = compTArgSchema compT
+            mconcat <$> traverse go (Vector.toList argSchema)
+        BuiltinFlat{} -> pure S.empty
+        Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
 
 {- This is a kind of improvised unification where we know that one side is necessarily more polymorphic than the other
    (and that the other can only contain rigid type variables or concrete types).
@@ -168,7 +191,6 @@ cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id subs
             Set.unions <$> traverse collectLocalVars toTraverse
         Datatype _ dtArgs -> Set.unions <$> traverse collectLocalVars (Vector.toList dtArgs)
 
-
 substCompT ::
     forall (a :: Type).
     (ValT a -> ValT AbstractTy) ->
@@ -218,7 +240,7 @@ countToAbstractions cnt
     cntI = review intCount cnt
 
     mkTV :: Int -> AbstractTy
-    mkTV =  BoundAt Z . fromJust . preview intIndex
+    mkTV = BoundAt Z . fromJust . preview intIndex
 
 -- 'getInstantiations' but works on the types we actually need
 instantiationHelper ::
@@ -275,12 +297,12 @@ instantiates var concrete abstract = case (concrete, abstract) of
     go _ [] = pure Nothing
     go (c : cs) (a : as) = (<|>) <$> instantiates var c a <*> go cs as
 
-
 resolveVar :: AbstractTy -> Reader Int AbstractTy
 resolveVar (BoundAt db ix) = do
     offset <- ask
     let db' = fromJust . preview asInt $ review asInt db - offset
     pure $ BoundAt db' ix
+
 -- Misc utils
 
 retTy :: CompT a -> ValT a

@@ -2,10 +2,11 @@
 
 module Main (main) where
 
-import Covenant.ASG (ASG, ASGBuilder, CovenantError, Id, Ref (AnArg, AnId), app', arg, builtin2, lam, lit, runASGBuilder)
+import Covenant.ASG (ASG (ASG), ASGBuilder, CovenantError, Id, Ref (AnArg, AnId), app', arg, builtin2, lam, lit, runASGBuilder)
 import Covenant.ArgDict (preprocess)
 import Covenant.Constant (AConstant (AnInteger))
 import Covenant.DeBruijn (DeBruijn (Z))
+import Covenant.ExtendedASG (wrapASG)
 import Covenant.Index (ix0, ix1)
 import Covenant.Prim (TwoArgFunc (AddInteger, MultiplyInteger))
 import Covenant.Test (Id (UnsafeMkId), conformanceDatatypes2, unsafeMkDatatypeInfos)
@@ -25,7 +26,7 @@ main =
         ]
 
 runArgResTest :: String -> ASG -> M.Map Id (Either (Vector Name) (Vector Id)) -> TestTree
-runArgResTest nm asg expected = testCase nm $ assertEqual nm expected (preprocess asg)
+runArgResTest nm (ASG asg) expected = testCase nm $ assertEqual nm expected (preprocess $ wrapASG asg)
 
 example1 :: ASG
 example1 = unsafeFromRight $ runASGBuilder (unsafeMkDatatypeInfos conformanceDatatypes2) go

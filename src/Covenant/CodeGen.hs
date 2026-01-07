@@ -1,4 +1,4 @@
-module Covenant.CodeGen (generatePLC) where
+module Covenant.CodeGen (compile, compilePretty, CodeGenError) where
 
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
@@ -9,9 +9,10 @@ import Covenant.ASG (
  )
 import Covenant.Constant (AConstant (ABoolean, AByteString, AString, AUnit, AnInteger))
 import Covenant.Data (DatatypeInfo)
-import Covenant.Test (Arg (UnsafeMkArg))
+import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId))
 import Covenant.Type (
     AbstractTy,
+    BuiltinFlatT,
     Constructor,
     ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
@@ -31,7 +32,7 @@ import Control.Monad.Error.Class (MonadError, throwError)
 import Control.Monad.Reader.Class (MonadReader, asks)
 import Control.Monad.State.Class (MonadState, gets, modify)
 import Control.Monad.Trans.Except (ExceptT)
-import Control.Monad.Trans.RWS (RWS)
+import Control.Monad.Trans.RWS (RWS, evalRWS)
 
 import Data.Foldable (foldl')
 
@@ -55,27 +56,52 @@ import Covenant.MockPlutus (
     bData,
     constrData,
     iData,
-    idName,
     listData,
     mapData,
     pApp,
     pBuiltin,
     pCase,
     pConstr,
-    pDataList,
     pDelay,
     pError,
     pForce,
     pLam,
     pVar,
     plutus_ConstrData,
-    plutus_I,
  )
 
-import Covenant.ArgDict (idToName)
+import Covenant.ArgDict (preprocess)
 
-import PlutusCore (Name)
+import Control.Monad.Except (runExceptT)
+import Covenant.ExtendedASG (extendedNodes, unExtendedASG)
+import Covenant.JSON (CompilationUnit)
+import Covenant.Transform (transformASG)
+import Covenant.Transform.Common (PolyRepHandler, TyFixerFnData (TyFixerFnData))
+import Covenant.Transform.Pipeline.Common (PipelineData, TransformState)
+import Covenant.Transform.TyUtils (idToName)
+import Data.Maybe (isJust)
+import Data.Row.Records (Rec)
+import Data.Row.Records qualified as R
+import Debug.Trace
+import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
+import Prettyprinter
+import UntypedPlutusCore (Unique (Unique))
+
+compilePretty = fmap pretty . compile
+
+compile :: CompilationUnit -> Either CodeGenError PlutusTerm
+compile cu = trace trace1 $ trace trace2 $ trace trace3 $ fst $ evalRWS (runExceptT act) datatypes M.empty
+  where
+    trace1 = "asg:\n" <> show nodes <> "\n\n"
+    trace2 = "argDict:\n" <> show argResDict <> "\n\n"
+    trace3 = "eNodes:\n" <> show (extendedNodes pipelineASG) <> "\n\n"
+    datatypes = pipelineData R..! #dtDict
+    (CodeGenM act) = generatePLC pipelineData argResDict nodes
+    pipelineData = transformASG cu
+    pipelineASG = pipelineData R..! #asg
+    argResDict = preprocess pipelineASG
+    nodes = snd $ unExtendedASG pipelineASG
 
 data CodeGenError
     = NoASG
@@ -119,6 +145,10 @@ newtype CodeGenM a = CodeGenM (ExceptT CodeGenError (RWS (Map TyName (DatatypeIn
         )
         via (ExceptT CodeGenError (RWS (Map TyName (DatatypeInfo AbstractTy)) () (Map Id PlutusTerm)))
 
+-- N.B. this should always (or almost always) give us a VARIABLE. The state is only a
+-- dictionary of terms in case there is some circumstance where we intentionally want to
+-- avoid let binding. (I believe in Plutarch it was determined that some constants and/or builtins
+-- are cheaper unhoisted for some reason, TODO double check that)
 lookupTerm :: Id -> CodeGenM PlutusTerm
 lookupTerm i =
     gets (M.lookup i) >>= \case
@@ -132,41 +162,76 @@ lookupDatatype tn =
         Just info -> pure info
 
 generatePLC ::
+    Rec PipelineData ->
     Map Id (Either (Vector Name) (Vector Id)) ->
     [(Id, ASGNode)] ->
     CodeGenM PlutusTerm
-generatePLC argDict = \case
+generatePLC pipelineData argDict = \case
     [] -> throwError NoASG
     ((i, n) : rest) -> go i n rest
   where
+    -- If we want to ensure our synthetic type fixer fn nodes have useful names we need to catch that *here*
     go :: Id -> ASGNode -> [(Id, ASGNode)] -> CodeGenM PlutusTerm
-    go i node rest = case rest of
-        [] -> nodeToTerm i argDict node
-        ((i', node') : rest') -> do
-            let letBindable = countOccurs i (node : map snd rest) > 1
-            thisTerm <- nodeToTerm i argDict node
-            if letBindable
-                then do
-                    modify $ M.insert i thisTerm
-                    go i' node' rest'
-                else do
-                    let iName = idName i
-                    let iVar = pVar iName
-                    modify $ M.insert i iVar
+    go i node rest
+        | isJust (M.lookup i (pipelineData R..! #tyFixers)) = do
+            -- we don't really need to check the tail because the only way this could
+            -- be the last node is if we were passed a totally empty ASG (in which case we'd never
+            -- do the type fixer transformation anyway and no nodes would exist)
+            let TyFixerFnData _ _ _ thisTermCompiled _ nm _ = (pipelineData R..! #tyFixers) M.! i
+                UnsafeMkId iInner = i
+                fnNm = Name nm (Unique (fromIntegral iInner))
+            modify $ M.insert i (pVar fnNm)
+            case rest of
+                ((i', node') : rest') -> do
                     termInner <- go i' node' rest'
-                    pure $ pLam iName termInner `pApp` thisTerm
+                    pure $ pLam fnNm termInner `pApp` thisTermCompiled
+        | isJust (M.lookup i (pipelineData R..! #handlerStubs)) = do
+            let stub = (pipelineData R..! #handlerStubs) M.! i
+                iName = idToName i
+                iVar = pVar iName
+            -- though I kind of suspect that inlining everything except an identity fn
+            -- will always gives a smaller script and make no perf difference
+            modify $ M.insert i iVar
+            case rest of
+                [] -> pure stub
+                ((i', node') : rest') -> do
+                    termInner <- go i' node' rest'
+                    pure $ pLam iName termInner `pApp` stub
+        | otherwise = case rest of
+            [] -> nodeToTerm i argDict node
+            ((i', node') : rest') -> do
+                thisTerm <- nodeToTerm i argDict node
+                let iName = idToName i
+                let iVar = pVar iName
+                modify $ M.insert i iVar
+                termInner <- go i' node' rest'
+                pure $ pLam iName termInner `pApp` thisTerm
 
+{- For now we're just going to let bind everything. We can fix it later.
+if letBindable
+    then do
+        modify $ M.insert i thisTerm
+        go i' node' rest'
+    else do
+        let iName = idName i
+        let iVar = pVar iName
+        modify $ M.insert i iVar
+        termInner <- go i' node' rest'
+        pure $ pLam iName termInner `pApp` thisTerm
+-}
+
+-- This should ONLY EVER BE CALLED THE FIRST TIME WE ENCOUNTER A NODE IN `generatePLC`
 nodeToTerm ::
     Id -> -- The Id of *THIS* node. Needed for arg resolution
     Map Id (Either (Vector Name) (Vector Id)) ->
     ASGNode ->
     CodeGenM PlutusTerm
-nodeToTerm i argDict = \case
+nodeToTerm i argDict node = case node of
     ACompNode _compTy compNodeInfo -> case compNodeInfo of
-        Builtin1 bi1 -> pure $ pBuiltin (SomeBuiltin1 bi1)
-        Builtin2 bi2 -> pure $ pBuiltin (SomeBuiltin2 bi2)
-        Builtin3 bi3 -> pure $ pBuiltin (SomeBuiltin3 bi3)
-        Builtin6 bi6 -> pure $ pBuiltin (SomeBuiltin6 bi6)
+        Builtin1 bi1 -> pure $ pBuiltin bi1
+        Builtin2 bi2 -> pure $ pBuiltin bi2
+        Builtin3 bi3 -> pure $ pBuiltin bi3
+        Builtin6 bi6 -> pure $ pBuiltin bi6
         Force r -> forceToTerm i argDict r
         Lam r -> lamToTerm argDict i r
     AValNode _valT valNodeInfo -> case valNodeInfo of
@@ -177,81 +242,10 @@ nodeToTerm i argDict = \case
             pure $ foldl' pApp fTerm resolvedArgs
         Thunk i' -> thunkToTerm i'
         _ -> error "All type fixing pseudo-app nodes should have been removed from the ASG by the point we call this function"
-    {-
-    Cata alg val -> cataToTerm alg val
-    DataConstructor tn cn fields -> dataConToTerm i argDict tn cn fields
-    Match scrut handlers -> matchToTerm i argDict scrut handlers
-    -}
     AnError -> pure pError
 
-matchToTerm :: Id -> Map Id (Either (Vector Name) (Vector Id)) -> Ref -> Vector Ref -> CodeGenM PlutusTerm
-matchToTerm matchNodeId argDict scrutinee handlers =
-    getEncodingRef scrutinee >>= \case
-        SOP -> do
-            scrutTerm <- refToTerm matchNodeId argDict scrutinee
-            handlersTerms <- traverse (refToTerm matchNodeId argDict) handlers
-            pure $ pCase scrutTerm handlersTerms
-        _ -> error "TODO: Implement"
-  where
-    -- NOTE: I don't think "matching on opaques" makes any sense, and if the scrutinee isn't a datatype,
-    --       then this should fail. I'll add proper errors later
-    getEncodingRef :: Ref -> CodeGenM DataEncoding
-    getEncodingRef = error "TODO This is tedious, come back to it later"
-
-dataConToTerm ::
-    Id -> -- the ID of *this* node
-    Map Id (Either (Vector Name) (Vector Id)) ->
-    TyName ->
-    ConstructorName ->
-    Vector Ref ->
-    CodeGenM PlutusTerm
-dataConToTerm i argDict tn cn@(ConstructorName rawCName) args = do
-    dtInfo <- lookupDatatype tn
-    case view #originalDecl dtInfo of
-        -- We assume the opaque encoding has been checked
-        OpaqueData{} -> case rawCName of
-            "PlutusI" -> iData <$> refToTerm i argDict (args Vector.! 0)
-            "PlutusB" -> bData <$> refToTerm i argDict (args Vector.! 0)
-            "PlutusConstr" -> do
-                termified <- traverse (refToTerm i argDict) args
-                let cIx = termified Vector.! 0
-                    cArgs = termified Vector.! 1
-                pure $ constrData cIx cArgs
-            "PlutusList" -> listData <$> traverse (refToTerm i argDict) args
-            "PlutusMap" -> mapData <$> traverse (refToTerm i argDict) args
-            other -> throwError $ InvalidOpaqueEncoding other
-        DataDeclaration _ _ ctors encoding -> case encoding of
-            SOP -> do
-                ctorIx <- getConstructorIndex tn cn ctors
-                resolvedArgs <- traverse (refToTerm i argDict) args
-                pure $ pConstr ctorIx resolvedArgs
-            PlutusData strategy ->
-                -- We are going to assume that the strategy has been checked
-                case strategy of
-                    EnumData -> plutus_I <$> getConstructorIndex tn cn ctors
-                    ProductListData -> pDataList <$> traverse (refToTerm i argDict) args
-                    T.ConstrData -> do
-                        cIx <- getConstructorIndex tn cn ctors
-                        plutus_ConstrData cIx <$> traverse (refToTerm i argDict) args
-                    NewtypeData -> refToTerm i argDict (Vector.head args)
-            BuiltinStrategy{} -> error "TODO Implement datacon term generator for builtins"
-
-getConstructorIndex ::
-    forall (n :: Type).
-    (Num n) =>
-    TyName ->
-    ConstructorName ->
-    Vector (Constructor AbstractTy) ->
-    CodeGenM n
-getConstructorIndex tn cn ctors = case Vector.findIndex (\x -> view #constructorName x == cn) ctors of
-    Nothing -> throwError $ ConstructorNotInDatatype tn cn
-    Just cIx -> pure $ fromIntegral cIx
-
-cataToTerm :: Ref -> Ref -> CodeGenM PlutusTerm
-cataToTerm = undefined
-
 thunkToTerm :: Id -> CodeGenM PlutusTerm
-thunkToTerm = pure . pDelay . idToVar
+thunkToTerm = fmap pDelay . lookupTerm
 
 litToTerm :: AConstant -> CodeGenM PlutusTerm
 litToTerm = \case
@@ -272,7 +266,12 @@ lamToTerm argDict lamNodeId bodyRef = case M.lookup lamNodeId argDict of
         let f = foldl' (\g argN -> g . pLam argN) id names
         resolvedBody <- refToTerm lamNodeId argDict bodyRef
         pure $ f resolvedBody
-    _anythingElse -> error "BOOOOOOOOOOM TODO: Better errors"
+    _anythingElse ->
+        error $
+            "Error, expected a Vector of Names in arg res dict entry for lamda id  "
+                <> show lamNodeId
+                <> " but got "
+                <> show _anythingElse
 
 forceToTerm ::
     Id -> -- id of the parent node
@@ -281,16 +280,17 @@ forceToTerm ::
     CodeGenM PlutusTerm
 forceToTerm parentId argDict = fmap pForce . refToTerm parentId argDict
 
-idToVar :: Id -> PlutusTerm
-idToVar = pVar . idToName
-
 refToTerm ::
     Id -> -- This is the Id of the *immediate parent node*. We need that for this to work bottom up
     Map Id (Either (Vector Name) (Vector Id)) -> -- The resolution dictory for args (tells us which names correspond to them)
     Ref ->
     CodeGenM PlutusTerm
 refToTerm parentId argDict = \case
-    AnId i -> pure $ idToVar i
+    AnId i -> do
+        -- Again, this is looking up something which should always or almost always be a variable.
+        -- If it weren't for the face that we do give some things informative variable names, we could just
+        -- convert the Id directly into its name.
+        lookupTerm i
     AnArg (UnsafeMkArg db ix _) -> do
         let dbInt = review asInt db
             ixInt = review intIndex ix

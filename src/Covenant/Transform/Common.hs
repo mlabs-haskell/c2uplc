@@ -62,7 +62,20 @@ import Covenant.Data (DatatypeInfo)
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (Count, Index, intCount, intIndex)
 
+import Covenant.ExtendedASG
+import Covenant.MockPlutus (
+    PlutusTerm,
+    pApp,
+    pCase,
+    pFst,
+    pLam,
+    pSnd,
+    pVar,
+    unConstrData,
+ )
 import Covenant.Test (Id (UnsafeMkId))
+import Covenant.Transform.Schema
+import Covenant.Transform.TyUtils (idToName)
 import Data.Foldable (
     foldl',
  )
@@ -75,20 +88,6 @@ import PlutusCore.Name.Unique (
     Name (Name),
     Unique (Unique),
  )
-
-import Covenant.ArgDict (idToName)
-import Covenant.ExtendedASG
-import Covenant.MockPlutus (
-    PlutusTerm,
-    pApp,
-    pCase,
-    pFst,
-    pLam,
-    pSnd,
-    pVar,
-    unConstrData,
- )
-import Covenant.Transform.Schema
 
 {- We need somewhere to stash these Ids (i.e. a reader context) since it's awkward to
    insert them into the ASG before we complete our analysis pass in the AppTranformM monad
@@ -237,12 +236,13 @@ data TyFixerNodeKind = MatchNode | IntroNode | CataNode
 
 -}
 data TyFixerDataBundle
-    = TyFixerDataBundle {introData :: Vector TyFixerFnData,
-                         matchData :: Maybe TyFixerFnData,
-                         cataData :: Maybe TyFixerFnData
-                        }
+    = TyFixerDataBundle
+    { introData :: Vector TyFixerFnData
+    , matchData :: Maybe TyFixerFnData
+    , cataData :: Maybe TyFixerFnData
+    }
 
-freshName :: AppTransformM Name
+freshName :: (MonadASG m) => m Name
 freshName = do
     UnsafeMkId w <- nextId
     let textPart = "var_" <> T.pack (show w)
@@ -258,7 +258,7 @@ freshNamePrefix nameBase = do
 genLambdaArgNames :: forall (a :: Type). Text -> Vector a -> AppTransformM (Vector Name)
 genLambdaArgNames nameBase = Vector.imapM genTermVarName
   where
-    genTermVarName ::  Int -> a -> AppTransformM Name
+    genTermVarName :: Int -> a -> AppTransformM Name
     genTermVarName pos _ = do
         UnsafeMkId i <- nextId
         let textPart = nameBase <> "_arg" <> T.pack (show pos)
@@ -278,13 +278,13 @@ countToTyVars cnt
 
 -- We could probably steal the plutarch typeclass trick to get arbitrary embedded lambdas... but
 -- that's overkill here
-pFreshLam :: (PlutusTerm -> AppTransformM PlutusTerm) -> AppTransformM PlutusTerm
+pFreshLam :: (MonadASG m) => (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
 pFreshLam f = do
     varName <- freshName
     let argVar = pVar varName
     pLam varName <$> f argVar
 
-pFreshLam2 :: (PlutusTerm -> PlutusTerm -> AppTransformM PlutusTerm) -> AppTransformM PlutusTerm
+pFreshLam2 :: (MonadASG m) => (PlutusTerm -> PlutusTerm -> m PlutusTerm) -> m PlutusTerm
 pFreshLam2 f = do
     varName1 <- freshName
     varName2 <- freshName

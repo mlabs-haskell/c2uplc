@@ -1,9 +1,7 @@
 module Covenant.Transform.Intro where
 
-
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-
 
 import Covenant.Type (
     AbstractTy,
@@ -14,7 +12,8 @@ import Covenant.Type (
     DataDeclaration (DataDeclaration, OpaqueData),
     DataEncoding (BuiltinStrategy, PlutusData, SOP),
     PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
-    ValT (Datatype), TyName,
+    TyName,
+    ValT (Datatype),
  )
 
 import Covenant.Data (DatatypeInfo)
@@ -27,6 +26,7 @@ import Covenant.MockPlutus (
     pConstr,
     pLam,
     pVar,
+    plutus_ConstrData,
     plutus_I,
  )
 import Data.Foldable (
@@ -110,7 +110,7 @@ mkConstructorFunctions tn =
                             ConstrData ->
                                 -- LIVE AS OF 12/31
                                 -- NOTE/FIXME/TODO: This shouldn't be plutus_I, use ConstrData which takes an Integer not a data
-                                pure $ constrData (plutus_I $ fromIntegral ctorIx) (listData handledCtorArgs)
+                                pure $ plutus_ConstrData (fromIntegral ctorIx) handledCtorArgs
                             NewtypeData ->
                                 -- NOTE: Double check whether we need to do any embedding here. Koz thinks we don't and he's pretty
                                 --       confident, so we probably don't.

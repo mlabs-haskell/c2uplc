@@ -18,12 +18,15 @@ module Covenant.ExtendedASG (
     eInsert,
     eTopLevelSrcNode,
     resolveExtended,
+    unExtendedASG,
+    removeEphemeralError,
 ) where
 
 import Control.Monad.RWS.Strict (MonadState (..), modify')
 import Control.Monad.State.Strict (State, StateT)
 import Covenant.ASG (ASG (ASG), ASGNode, Id, topLevelId)
 import Covenant.Test (Id (UnsafeMkId))
+import Data.Bifunctor (first)
 import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -47,7 +50,7 @@ data ExtendedId
       --  - A destructor function for a datatype, such as match_Maybe or match_List
       --  - A catamorphism for tearing down recursive datatypes
       TyFixerFnId Id
-    deriving stock (Eq)
+    deriving stock (Eq, Show)
 
 {- This is largely the reason to have ExtendedId.
 
@@ -101,6 +104,12 @@ data ExtendedASG = ExtendedASG (Map ExtendedId ASGNode) (Map Id ExtendedId) Id
 extendedNodes :: ExtendedASG -> Map ExtendedId ASGNode
 extendedNodes (ExtendedASG nodes _ _) = nodes
 
+unExtendedASG :: ExtendedASG -> (Id, [(Id, ASGNode)])
+unExtendedASG (ExtendedASG nodes _ _) = (topSrcId, rawASG)
+  where
+    topSrcId = forgetExtendedId . fst $ M.findMax nodes
+    rawASG = first forgetExtendedId <$> M.toList nodes
+
 wrapASG :: Map Id ASGNode -> ExtendedASG
 wrapASG asg = ExtendedASG nodes idResolver (fst . M.findMax $ asg)
   where
@@ -130,7 +139,7 @@ resolveExtended ::
     forall (m :: Type -> Type).
     (MonadASG m) =>
     Id ->
-    m (ExtendedId)
+    m ExtendedId
 resolveExtended i = do
     ExtendedASG _ m _ <- getASG
     pure $ m M.! i
@@ -206,3 +215,11 @@ eInsert eid node = do
     let nodes' = M.insert eid node nodes
         resolver' = M.insert (forgetExtendedId eid) eid resolver
     putASG $ ExtendedASG nodes' resolver' maxId
+
+removeEphemeralError :: forall m. (MonadASG m) => ExtendedId -> m ()
+removeEphemeralError = \case
+    eid@(EphemeralError i) -> do
+        ExtendedASG nodes resolver maxId <- getASG
+        let nodes' = M.delete eid nodes
+        putASG (ExtendedASG nodes' resolver maxId)
+    _somethingElse -> error $ "removeEphemeralError called with: " <> show _somethingElse <> ", which is not an ephemeral error ID"
