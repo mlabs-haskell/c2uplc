@@ -17,12 +17,17 @@ import Control.Monad (void)
 import Covenant.MockPlutus (PlutusTerm)
 import Data.Map (Map)
 import Data.Map qualified as M
+import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Debug.Trace
 
 import Optics.Core (view)
 import Prettyprinter
 
+import Covenant.DeBruijn (DeBruijn (..))
+import Covenant.Index
+import Covenant.MockPlutus (betterPrettyPlutus)
+import Covenant.Test (unsafeMkDatatypeInfos)
 import Data.Either (isRight)
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -35,7 +40,7 @@ main =
             [ testCase "simpleCaseCompilesWithoutErrors" simpleCase
             ]
   where
-    simpleCase = assertBool "addTwoNumbers didn't compile" . isRight $ testCompile M.empty addTwoNumbers
+    simpleCase = assertBool "addTwoNumbers didn't compile" . isRight $ testCompile mempty addTwoNumbers
 
 data CompilerError
     = ASGConstructionFail CovenantError
@@ -44,29 +49,45 @@ data CompilerError
 
 testCompile ::
     forall a.
-    Map TyName (DatatypeInfo AbstractTy) ->
+    Vector (DataDeclaration AbstractTy) ->
     ASGBuilder a ->
-    Either CompilerError PlutusTerm
+    Either String PlutusTerm
 testCompile dtDict builder = case mkASG dtDict builder of
-    Left asgErr -> Left (ASGConstructionFail asgErr)
+    Left asgErr -> Left $ show (ASGConstructionFail asgErr)
     Right cu -> case compile cu of
-        Left cgErr -> Left (CodeGenFail cgErr)
+        Left cgErr -> Left $ show (CodeGenFail cgErr)
         Right resTerm -> do
-            traceM $ "\n" <> show (pretty resTerm) <> "\n"
-            pure resTerm
+            traceM $ "\n" <> show (betterPrettyPlutus resTerm) <> "\n"
+            case evalTerm resTerm of
+                Left errMsg -> Left errMsg
+                Right evaluated -> do
+                    traceM $ "\nevaluated:\n" <> show (betterPrettyPlutus evaluated)
+                    pure evaluated
+
+maybeT :: DataEncoding -> DataDeclaration AbstractTy
+maybeT =
+    DataDeclaration
+        "Maybe"
+        count1
+        [ Constructor "Nothing" []
+        , Constructor "Just" [tyvar Z ix0]
+        ]
+
+maybeSOP :: DataDeclaration AbstractTy
+maybeSOP = maybeT SOP
+
+maybeData :: DataDeclaration AbstractTy
+maybeData = maybeT (PlutusData Covenant.Type.ConstrData)
 
 mkASG ::
     forall a.
-    Map TyName (DatatypeInfo AbstractTy) ->
+    Vector (DataDeclaration AbstractTy) ->
     ASGBuilder a ->
     Either CovenantError CompilationUnit
-mkASG dtDict builder = case runASGBuilder dtDict builder of
+mkASG dtDict builder = case runASGBuilder (unsafeMkDatatypeInfos $ V.toList dtDict) builder of
     Left err' -> Left err'
     Right (ASG asg) -> do
-        pure $ CompilationUnit (extractDecls dtDict) asg (Version 0 0)
-  where
-    extractDecls :: Map TyName (DatatypeInfo AbstractTy) -> V.Vector (DataDeclaration AbstractTy)
-    extractDecls = V.fromList . map (view #originalDecl) . M.elems
+        pure $ CompilationUnit dtDict asg (Version 0 0)
 
 addTwoNumbers :: ASGBuilder Id
 addTwoNumbers = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
@@ -74,3 +95,14 @@ addTwoNumbers = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
     two <- AnId <$> lit (AnInteger 2)
     plus <- builtin2 AddInteger
     AnId <$> app' plus [one, two]
+
+matchOnMaybeInt :: ASGBuilder Id
+matchOnMaybeInt = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
+    zero <- AnId <$> lit (AnInteger 0)
+    two <- AnId <$> lit (AnInteger 2)
+    just2 <- AnId <$> ctor' "Maybe" "Just" [two]
+    plus <- builtin2 AddInteger
+    justHandler <- lazyLam (Comp0 $ BuiltinFlat IntegerT :--:> ReturnT (BuiltinFlat IntegerT)) $ do
+        justWhat <- arg Z ix0
+        AnId <$> app' plus [AnArg justWhat, AnArg justWhat]
+    AnId <$> match just2 [zero, AnId justHandler]

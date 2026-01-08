@@ -1,9 +1,7 @@
 module Covenant.Transform.Elim where
 
-
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-
 
 import Covenant.Type (
     AbstractTy,
@@ -21,6 +19,7 @@ import Covenant.MockPlutus (
     PlutusTerm,
     pApp,
     pCase,
+    pForce,
     pLam,
     pVar,
     unIData,
@@ -138,7 +137,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
             branchHandlers :: Vector PlutusTerm
             branchHandlers =
                 let numHandlers = Vector.length origMatchFnArgs - 1
-                 in pVar <$> Vector.slice 1 numHandlers lamArgNames
+                 in pForce . pVar <$> Vector.slice 1 numHandlers lamArgNames
 
             typedBranchHandlers :: Vector (ValT AbstractTy, PlutusTerm)
             typedBranchHandlers = Vector.zip (Vector.drop 1 origMatchFnArgs) branchHandlers

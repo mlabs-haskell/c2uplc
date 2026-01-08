@@ -5,10 +5,8 @@
 
 module Covenant.Transform.Cata where
 
-
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-
 
 import Covenant.Type (
     AbstractTy (BoundAt),
@@ -48,7 +46,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
     go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe TyFixerFnData)
     go dtInfo = case view #originalDecl dtInfo of
-        OpaqueData{} -> error "Do we support catamorphisms over opaque types? If we do come back and fix this later"
+        OpaqueData{} -> pure Nothing
         nonOpaqueDecl ->
             if not (isRecursiveDatatype nonOpaqueDecl)
                 then pure Nothing
@@ -248,7 +246,7 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
 
     isR :: ValT AbstractTy -> Bool
     isR (Abstraction (BoundAt _ indx)) = indx == rIndex
-    isR _ = False 
+    isR _ = False
 
 {- Strictly we don't need this, we could just examine every ASG node and check whether
    a catamorphism for the type we're concerned with is used, or we could drive this process by

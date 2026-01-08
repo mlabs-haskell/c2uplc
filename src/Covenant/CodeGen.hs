@@ -1,4 +1,4 @@
-module Covenant.CodeGen (compile, compilePretty, CodeGenError) where
+module Covenant.CodeGen (compile, evalTerm, compilePretty, CodeGenError) where
 
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
@@ -88,20 +88,47 @@ import PlutusCore.MkPlc (mkConstant)
 import Prettyprinter
 import UntypedPlutusCore (Unique (Unique))
 
+-- evaluation stuff
+import PlutusCore qualified as PLC
+import PlutusCore.Evaluation.Machine.ExBudget (
+    ExBudget (ExBudget),
+    ExRestrictingBudget (ExRestrictingBudget),
+    minusExBudget,
+ )
+import PlutusCore.Evaluation.Machine.ExBudgetingDefaults (defaultCekParametersForTesting)
+import PlutusCore.Evaluation.Machine.ExMemory (ExCPU (ExCPU), ExMemory (ExMemory))
+import Prettyprinter
+import UntypedPlutusCore (
+    Program (Program),
+    Term,
+    Version (Version),
+ )
+import UntypedPlutusCore qualified as UPLC
+import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
+
 compilePretty = fmap pretty . compile
 
+{- Add optimization pass after UPLC generation
+
+   See: https://github.com/Plutonomicon/plutarch-plutus/blob/treasury-milestone-3/Plutarch/Internal/Term.hs#L829-L853
+-}
 compile :: CompilationUnit -> Either CodeGenError PlutusTerm
 compile cu = trace trace1 $ trace trace2 $ trace trace3 $ fst $ evalRWS (runExceptT act) datatypes M.empty
   where
-    trace1 = "asg:\n" <> show nodes <> "\n\n"
+    trace1 = "asg:\n" <> show (prettyNodes [] nodes) <> "\n\n"
     trace2 = "argDict:\n" <> show argResDict <> "\n\n"
-    trace3 = "eNodes:\n" <> show (extendedNodes pipelineASG) <> "\n\n"
+    trace3 = "eNodes:\n" <> (show $ extendedNodes pipelineASG) <> "\n\n"
     datatypes = pipelineData R..! #dtDict
     (CodeGenM act) = generatePLC pipelineData argResDict nodes
     pipelineData = transformASG cu
     pipelineASG = pipelineData R..! #asg
     argResDict = preprocess pipelineASG
     nodes = snd $ unExtendedASG pipelineASG
+
+    prettyNodes acc [] = vcat $ reverse acc
+    prettyNodes acc ((UnsafeMkId i, node) : rest) =
+        let here = "let" <+> pretty i <+> "=" <+> viaShow node
+         in prettyNodes (here : acc) rest
 
 data CodeGenError
     = NoASG
@@ -185,6 +212,7 @@ generatePLC pipelineData argDict = \case
                 ((i', node') : rest') -> do
                     termInner <- go i' node' rest'
                     pure $ pLam fnNm termInner `pApp` thisTermCompiled
+                [] -> error "FILL IN THIS CASE"
         | isJust (M.lookup i (pipelineData R..! #handlerStubs)) = do
             let stub = (pipelineData R..! #handlerStubs) M.! i
                 iName = idToName i
@@ -203,9 +231,13 @@ generatePLC pipelineData argDict = \case
                 thisTerm <- nodeToTerm i argDict node
                 let iName = idToName i
                 let iVar = pVar iName
+                {- If you put this back it will stop inlining everything
                 modify $ M.insert i iVar
                 termInner <- go i' node' rest'
                 pure $ pLam iName termInner `pApp` thisTerm
+                -}
+                modify $ M.insert i thisTerm
+                go i' node' rest'
 
 {- For now we're just going to let bind everything. We can fix it later.
 if letBindable
@@ -220,6 +252,9 @@ if letBindable
         pure $ pLam iName termInner `pApp` thisTerm
 -}
 
+{- TODO: Intro forms need to have a `Delay` in the generated code b/c they end up as thunks in the
+         covenant ASG.
+-}
 -- This should ONLY EVER BE CALLED THE FIRST TIME WE ENCOUNTER A NODE IN `generatePLC`
 nodeToTerm ::
     Id -> -- The Id of *THIS* node. Needed for arg resolution
@@ -256,7 +291,7 @@ litToTerm = \case
     AString txt -> pure $ mkConstant () txt
 
 lamToTerm ::
-    Map Id (Either (Vector Name) (Vector Id)) -> -- our argument resolution dictionary, tho here we're using it "the other way around"
+    Map Id (Either (Vector Name) (Vector Id)) -> -- our argument resolution dictionary
     Id -> -- the Id of the lambda node
     Ref -> -- body
     CodeGenM PlutusTerm
@@ -288,7 +323,7 @@ refToTerm ::
 refToTerm parentId argDict = \case
     AnId i -> do
         -- Again, this is looking up something which should always or almost always be a variable.
-        -- If it weren't for the face that we do give some things informative variable names, we could just
+        -- If it weren't for the fact that we do give some things informative variable names, we could just
         -- convert the Id directly into its name.
         lookupTerm i
     AnArg (UnsafeMkArg db ix _) -> do
@@ -306,6 +341,8 @@ refToTerm parentId argDict = \case
                             Left namesForReal -> pure . pVar $ namesForReal Vector.! ixInt
                             Right _ -> throwError $ ArgResolutionFail (LamIdPointsAtContext bindingLamId)
 
+-- TODO: Need to rework this to ignore synthetic (compiler generated) nodes since we really really really
+--       want to make sure they definitely get let bound
 countOccurs :: Id -> [ASGNode] -> Int
 countOccurs i = foldl' go 0
   where
@@ -331,3 +368,27 @@ countOccurs i = foldl' go 0
             DataConstructor _tn _cn fields -> n + sum (countRef <$> fields)
             Match scrut handlers -> n + countRef scrut + sum (countRef <$> handlers)
         AnError{} -> n
+
+-----------------------------------
+
+-- Returns a pretty error bundle (or at least, like, a string-ey error bundle)
+-- or the evaluated term
+
+evalTerm :: PlutusTerm -> Either String PlutusTerm
+evalTerm t = case errOrRes of
+    Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log
+    Right res -> pure res
+  where
+    (errOrRes, log) = evalTerm' t
+
+-- no budget, don't care yet
+evalTerm' ::
+    PlutusTerm ->
+    ( Either
+        (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
+        PlutusTerm
+    , [Text]
+    )
+evalTerm' t =
+    case Cek.runCek defaultCekParametersForTesting Cek.counting Cek.logEmitter t of
+        (errOrRes, _, logs) -> (errOrRes, logs)

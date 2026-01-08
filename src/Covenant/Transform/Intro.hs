@@ -24,6 +24,7 @@ import Covenant.MockPlutus (
     listData,
     pApp,
     pConstr,
+    pDelay,
     pLam,
     pVar,
     plutus_ConstrData,
@@ -88,7 +89,7 @@ mkConstructorFunctions tn =
             let ctorArgNames = Vector.take (Vector.length ctorArgs) names
                 lamArgVars = pVar <$> ctorArgNames
                 nameTyPairs = Vector.zip ctorArgNames ctorArgs
-                lamBuilder = foldl' (\g argN -> g . pLam argN) id names
+                lamBuilder = foldl' (\g argN -> g . pLam argN) id names . pDelay
             case schema of
                 SOPSchema _ -> pure . lamBuilder $ pConstr (fromIntegral ctorIx) (pVar <$> ctorArgNames)
                 DataSchema _ handlerArgPosDict -> do
@@ -106,16 +107,17 @@ mkConstructorFunctions tn =
                         BuiltinStrategy _ -> error "TODO: Remember how to handle code generation for builtin strategies"
                         PlutusData strat -> case strat of
                             EnumData -> pure $ lamBuilder (plutus_I $ fromIntegral ctorIx)
-                            ProductListData -> pure $ listData handledCtorArgs
+                            ProductListData -> pure . lamBuilder $ listData handledCtorArgs
                             ConstrData ->
                                 -- LIVE AS OF 12/31
                                 -- NOTE/FIXME/TODO: This shouldn't be plutus_I, use ConstrData which takes an Integer not a data
-                                pure $ plutus_ConstrData (fromIntegral ctorIx) handledCtorArgs
+                                pure . lamBuilder $ plutus_ConstrData (fromIntegral ctorIx) handledCtorArgs
                             NewtypeData ->
                                 -- NOTE: Double check whether we need to do any embedding here. Koz thinks we don't and he's pretty
                                 --       confident, so we probably don't.
-                                pure $ handledCtorArgs Vector.! 0
+                                pure . lamBuilder $ handledCtorArgs Vector.! 0
 
+        -- TODO/FIXME: Make sure that this returns a THUNK type
         mkCtorFnTy :: Count "tyvar" -> Vector (ValT AbstractTy) -> CompT AbstractTy
         mkCtorFnTy datatypeNumParams args =
             let result = Datatype tn (countToTyVars datatypeNumParams)

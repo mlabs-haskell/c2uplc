@@ -8,13 +8,12 @@ import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Vector qualified as Vector
 
-
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
     ASGNodeType (ValNodeType),
     CompNodeInfo (Force, Lam),
     Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Match, Thunk, Lit),
+    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
     typeASGNode,
  )
 import Covenant.Type (
@@ -24,7 +23,8 @@ import Covenant.Type (
     ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
     PlutusDataConstructor (..),
-    ValT (Datatype), TyName,
+    TyName,
+    ValT (Datatype),
  )
 
 import Control.Monad.State.Strict (gets, modify')
@@ -34,19 +34,19 @@ import Data.Foldable (
  )
 import Optics.Core (view)
 
-
 import Covenant.ExtendedASG
 import Covenant.Transform.Common
 import Data.Row.Records qualified as R
 import Data.Set qualified as Set
 
 import Covenant.Transform.Pipeline.Common
-import Covenant.Transform.TyUtils 
+import Covenant.Transform.TyUtils
+
 {- Rewrites type fixer nodes into applications.
 
    This also constructs and inserts dummy functions into the ASG
 -}
-transformTypeFixerNodes ::  MetaM TransformState ()
+transformTypeFixerNodes :: MetaM TransformState ()
 transformTypeFixerNodes = do
     topSrcNode <- fst <$> (eTopLevelSrcNode :: MetaM TransformState (ExtendedId, ASGNode))
     go topSrcNode --  dtDict magicErr tyFixers
@@ -130,7 +130,8 @@ transformTypeFixerNodes = do
                                     handlerTypes <- traverse unsafeRefType (Vector.toList handlers)
                                     scrutTy <- unsafeRefType arg
                                     let cataFnConcrete = applyArgs cataFnPolyTy (scrutTy : handlerTypes)
-                                        newValNode = AppInternal (forgetExtendedId i) (Vector.cons arg handlers) Vector.empty cataFnConcrete
+                                        -- DOUBLE CHECK WHETHER `i` is the right ID here TODO/FIXME/REVIEW
+                                        newValNode = AppInternal (forgetExtendedId cataId) (Vector.cons arg handlers) Vector.empty cataFnConcrete
                                         newASGNode = AValNode valT newValNode
                                     insertAndMarkVisited i newASGNode
                                     -- NOTE: This is just a placeholder tagged with the polymorphic function type, which we need.
@@ -153,7 +154,7 @@ transformTypeFixerNodes = do
                                 Just dat@(TyFixerFnData _nm _enc matchFnPolyTy _compiled _schema _fnName _) -> do
                                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId matchId) dat)
                                     let matchFnConcrete = applyArgs matchFnPolyTy (scrutTy : handlerTypes)
-                                        newValNode = AppInternal (forgetExtendedId i) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
+                                        newValNode = AppInternal (forgetExtendedId matchId) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
                                         newASGNode = AValNode valT newValNode
                                     insertAndMarkVisited i newASGNode
                                     -- NOTE: See previous note
@@ -176,7 +177,7 @@ transformTypeFixerNodes = do
                                             let ctorFnData = constrFunctions Vector.! ctorIx
                                                 dat@(TyFixerFnData _nm _enc ctorFnPolyTy _compiled _schema _fnName _) = ctorFnData
                                                 ctorFnConcrete = applyArgs ctorFnPolyTy argTys
-                                                newValNode = AppInternal (forgetExtendedId i) ctorArgs Vector.empty ctorFnConcrete
+                                                newValNode = AppInternal (forgetExtendedId ctorFnId) ctorArgs Vector.empty ctorFnConcrete
                                                 newASGNode = AValNode valT newValNode
                                             modify' $ mapField #tyFixers (M.insert (forgetExtendedId ctorFnId) dat)
                                             insertAndMarkVisited i newASGNode

@@ -36,6 +36,8 @@ module Covenant.MockPlutus (
     twoArgFuncs,
     threeArgFuncs,
     sixArgFuncs,
+    -- for debugging
+    betterPrettyPlutus,
 ) where
 
 import Covenant.Constant (AConstant (..))
@@ -50,7 +52,8 @@ import PlutusCore (Name)
 import PlutusCore.Default (Some, ValueOf)
 import PlutusCore.Default.Builtins qualified as PB
 import PlutusCore.MkPlc (mkConstant)
-import UntypedPlutusCore (DefaultFun, DefaultUni, Term (Apply, Builtin, Case, Constant, Constr, Delay, Error, Force, LamAbs, Var))
+import Prettyprinter
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name (..), Term (Apply, Builtin, Case, Constant, Constr, Delay, Error, Force, LamAbs, Var))
 
 -- mock Plutus types and placeholder helpers
 type PlutusTerm = Term Name DefaultUni DefaultFun ()
@@ -81,6 +84,15 @@ pError = Error ()
 pCase :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
 pCase = Case ()
 
+betterPrettyPlutus :: forall ann. PlutusTerm -> Doc ann
+betterPrettyPlutus pt = vcat . reverse $ go [] pt
+  where
+    go :: [Doc ann] -> PlutusTerm -> [Doc ann]
+    go acc = \case
+        Apply () (LamAbs () (Name txt _) body) arg ->
+            let here = "let" <+> pretty txt <+> "=" <+> pretty arg
+             in go (here : acc) body
+        other -> pretty other : acc
 pConstant :: AConstant -> PlutusTerm
 pConstant = \case
     AUnit -> mkConstant () ()
@@ -196,8 +208,8 @@ pMkBuiltin = \case
         Blake2b_256 -> Builtin () PB.Blake2b_256
         EncodeUtf8 -> Builtin () PB.EncodeUtf8
         DecodeUtf8 -> Builtin () PB.DecodeUtf8
-        FstPair -> pForce $ Builtin () PB.FstPair
-        SndPair -> pForce $ Builtin () PB.SndPair
+        FstPair -> pForce $ pForce $ Builtin () PB.FstPair
+        SndPair -> pForce $ pForce $ Builtin () PB.SndPair
         HeadList -> pForce $ Builtin () PB.HeadList
         TailList -> pForce $ Builtin () PB.TailList
         NullList -> pForce $ Builtin () PB.NullList

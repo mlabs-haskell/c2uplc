@@ -132,8 +132,11 @@ instance ExtendedKey Id where
 -- | Unsafe
 eNodeAt ::
     forall (a :: Type) (m :: Type -> Type).
-    (MonadASG m, ExtendedKey a) => a -> m ASGNode
-eNodeAt k = getASG >>= \asg -> pure . fromJust . eSafeNodeAt k $ asg
+    (MonadASG m, ExtendedKey a, Show a) => a -> m ASGNode
+eNodeAt k =
+    getASG >>= \asg -> case eSafeNodeAt k asg of
+        Nothing -> error $ "eNodeAt: Error: Key " <> show k <> " not found in ExtendedASG"
+        Just res -> pure res
 
 resolveExtended ::
     forall (m :: Type -> Type).
@@ -216,10 +219,9 @@ eInsert eid node = do
         resolver' = M.insert (forgetExtendedId eid) eid resolver
     putASG $ ExtendedASG nodes' resolver' maxId
 
-removeEphemeralError :: forall m. (MonadASG m) => ExtendedId -> m ()
-removeEphemeralError = \case
-    eid@(EphemeralError i) -> do
-        ExtendedASG nodes resolver maxId <- getASG
+removeEphemeralError :: ExtendedId -> ExtendedASG -> ExtendedASG
+removeEphemeralError eid (ExtendedASG nodes resolver maxId) = case eid of
+    EphemeralError i ->
         let nodes' = M.delete eid nodes
-        putASG (ExtendedASG nodes' resolver maxId)
+         in ExtendedASG nodes' resolver maxId
     _somethingElse -> error $ "removeEphemeralError called with: " <> show _somethingElse <> ", which is not an ephemeral error ID"

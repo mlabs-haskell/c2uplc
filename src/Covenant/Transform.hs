@@ -77,7 +77,7 @@ transformASG (CompilationUnit datatypes asg _) = flip evalState extended $ do
 -- and removes the placeholder error node
 mkStubs :: forall m. (MonadASG m) => Rec FirstPassMeta -> m (Map Id PlutusTerm)
 mkStubs firstPassData = do
-    removeEphemeralError (firstPassData R..! #uniqueError)
+    -- removeEphemeralError (firstPassData R..! #uniqueError)
     polyRepStubs <- foldM cleanupPolyRep M.empty (M.toList $ firstPassData R..! #builtinHandlers)
     cleanupIdentity (firstPassData R..! #identityFn) polyRepStubs
   where
