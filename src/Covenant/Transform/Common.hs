@@ -83,6 +83,7 @@ import Data.Kind (Type)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Debug.Trace (traceM)
 import Optics.Core (preview, review)
 import PlutusCore.Name.Unique (
     Name (Name),
@@ -166,24 +167,43 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
     Maybe (Index "tyvar") ->
     ValT AbstractTy ->
     AppTransformM (Maybe PlutusTerm)
-resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT = case valT of
-    Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of
-        Nothing -> case maybeR of
-            Just rIndex | indx == rIndex -> pure . Just $ lamArgVars Vector.! 0
-            _ -> pure Nothing
-        Just hIx -> pure $ lamArgVars Vector.!? hIx
-    bi@(BuiltinFlat _) -> do
-        mRepHandler <- lookupPolyRepHandler bi
-        case mRepHandler of
-            Nothing -> pure Nothing
-            Just polyRepHandler -> pure . Just . extractHandler $ polyRepHandler
-    _anythingElse -> pure Nothing
+resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
+    traceM msg >> case valT of
+        Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of
+            Nothing -> case maybeR of
+                Just rIndex | indx == rIndex -> traceM "resolve r" >> pure . Just $ lamArgVars Vector.! 0
+                _ -> traceM "resolve no handler no r" >> pure Nothing
+            Just hIx -> traceM ("resolve result: " <> show hIx) >> pure $ lamArgVars Vector.!? hIx
+        bi@(BuiltinFlat _) -> do
+            mRepHandler <- lookupPolyRepHandler bi
+            case mRepHandler of
+                Nothing -> traceM "resolve no polyRepHandler" >> pure Nothing
+                Just polyRepHandler -> do
+                    let handler = extractHandler polyRepHandler
+                        msg = "resolve found poly rep handler " <> show handler
+                    traceM msg
+                    pure . Just $ handler
+        _anythingElse -> traceM "resolve nothing catchall" >> pure Nothing
   where
+    msg =
+        "resolvePolyRep:\n  "
+            <> show handlerArgPosDict
+            <> "\n valTy: "
+            <> show valT
+            <> "\n argVars: "
+            <> show lamArgVars
+            <> "\n maybeR: "
+            <> show maybeR
+            <> "\n"
+
     extractHandler :: PolyRepHandler -> PlutusTerm
     extractHandler (PolyRepHandler projF embedF) = case nodeKind of
         MatchNode -> pVar . idToName $ projF
         CataNode -> pVar . idToName $ projF
         IntroNode -> pVar . idToName $ embedF
+
+prettyMap' :: (Show k, Show v) => Map k v -> String
+prettyMap' = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"
 
 {- This records the information we need for our "mock" functions for catamorphisms/datatype intro/datatype elimination
 

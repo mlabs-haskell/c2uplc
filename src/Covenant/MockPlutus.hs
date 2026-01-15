@@ -11,6 +11,7 @@ module Covenant.MockPlutus (
     pForce,
     pDelay,
     pError,
+    pLet,
     pConstant,
     pConstr,
     plutus_I,
@@ -21,6 +22,7 @@ module Covenant.MockPlutus (
     listData,
     mapData,
     SomeBuiltin (..),
+    IsBuiltin (..),
     pBuiltin,
     pCase,
     unIData,
@@ -38,6 +40,7 @@ module Covenant.MockPlutus (
     sixArgFuncs,
     -- for debugging
     betterPrettyPlutus,
+    prettyPTerm,
 ) where
 
 import Covenant.Constant (AConstant (..))
@@ -48,7 +51,8 @@ import Data.Foldable (foldl')
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Data.Word (Word64)
-import PlutusCore (Name)
+import PlutusCore (Name, someValue)
+import PlutusCore.Data (Data)
 import PlutusCore.Default (Some, ValueOf)
 import PlutusCore.Default.Builtins qualified as PB
 import PlutusCore.MkPlc (mkConstant)
@@ -66,6 +70,9 @@ pLam = LamAbs ()
 
 pApp :: PlutusTerm -> PlutusTerm -> PlutusTerm
 pApp = Apply ()
+
+pLet :: Name -> PlutusTerm -> PlutusTerm -> PlutusTerm
+pLet varNm toBind inner = pLam varNm inner # toBind
 
 -- It just makes things easier to read. Same fixity as plutarch
 (#) :: PlutusTerm -> PlutusTerm -> PlutusTerm
@@ -90,9 +97,60 @@ betterPrettyPlutus pt = vcat . reverse $ go [] pt
     go :: [Doc ann] -> PlutusTerm -> [Doc ann]
     go acc = \case
         Apply () (LamAbs () (Name txt _) body) arg ->
-            let here = "let" <+> pretty txt <+> "=" <+> pretty arg
+            let here = "let" <+> pretty txt <+> "=" <+> pretty arg <+> space
              in go (here : acc) body
         other -> pretty other : acc
+
+prettyPTerm :: forall ann. PlutusTerm -> Doc ann
+prettyPTerm pt = case takeBindable ([], pt) of
+    ([], rest) -> prettyNoBind rest
+    (letBinds, rest) ->
+        let pRest = "in" <+> prettyNoBind rest
+         in align . vcat . reverse $ (pRest : letBinds)
+  where
+    takeBindable :: ([Doc ann], PlutusTerm) -> ([Doc ann], PlutusTerm)
+    takeBindable (acc, t) = case t of
+        Apply () (LamAbs () (Name txt _) body) arg ->
+            let here = "let" <+> pretty txt <+> "=" <+> prettyPTerm arg
+             in takeBindable (here : acc, body)
+        other -> (acc, other)
+
+    prettyNoBind :: PlutusTerm -> Doc ann
+    prettyNoBind = \case
+        Var () (Name txt _) -> pretty txt
+        LamAbs () (Name txt _) body ->
+            align . group $
+                "\\" <> pretty txt <+> "->" <> line <> nest 2 (prettyPTerm body)
+        Apply () f arg ->
+            let fs = prettyAtomic <$> analyzeApp f
+             in align . group . encloseSep "" "" " # " $ (fs <> [prettyAtomic arg])
+        Force () inner -> "!" <> prettyAtomic inner
+        Delay () inner -> angles $ prettyNoBind inner
+        c@(Constant a b) -> pretty b
+        bi@(Builtin a b) -> pretty b
+        Error{} -> "ERROR"
+        Constr () cix args -> "constr" <+> pretty cix <+> list (prettyPTerm <$> args)
+        Case () scrut handlers ->
+            group $
+                "case"
+                    <+> prettyNoBind scrut
+                    <+> hardline
+                    <> group
+                        (indent 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
+
+    prettyAtomic :: PlutusTerm -> Doc ann
+    prettyAtomic = \case
+        v@Var{} -> prettyNoBind v
+        c@Constant{} -> prettyNoBind c
+        e@Error{} -> prettyNoBind e
+        d@Delay{} -> prettyNoBind d
+        f@Force{} -> prettyNoBind f
+        b@Builtin{} -> prettyNoBind b
+        other -> align . group . parens . prettyNoBind $ other
+    analyzeApp :: PlutusTerm -> [PlutusTerm]
+    analyzeApp = \case
+        Apply () f arg -> analyzeApp f <> [arg]
+        other -> [other]
 pConstant :: AConstant -> PlutusTerm
 pConstant = \case
     AUnit -> mkConstant () ()
@@ -150,7 +208,7 @@ pCons :: PlutusTerm -> PlutusTerm -> PlutusTerm
 pCons x xs = pBuiltin MkCons # x # xs
 
 pNil :: PlutusTerm
-pNil = Builtin () PB.MkNilData
+pNil = Constant () $ someValue @[Data] []
 
 -- This makes a builtin list, not data-wrapped
 pBuiltinList :: Vector PlutusTerm -> PlutusTerm

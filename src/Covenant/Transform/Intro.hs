@@ -36,6 +36,9 @@ import Data.Foldable (
 import Optics.Core (view)
 
 import Covenant.Transform.Common
+import Data.Map (Map)
+import Data.Map qualified as M
+import Debug.Trace
 
 -- TODO: Better comments (tho fortunately this one is the most straightforward)
 
@@ -87,7 +90,7 @@ mkConstructorFunctions tn =
             names <- genLambdaArgNames cName introFnArgs
             -- The names of arguments to the ctors
             let ctorArgNames = Vector.take (Vector.length ctorArgs) names
-                lamArgVars = pVar <$> ctorArgNames
+                lamArgVars = pVar <$> names
                 nameTyPairs = Vector.zip ctorArgNames ctorArgs
                 lamBuilder = foldl' (\g argN -> g . pLam argN) id names . pDelay
             case schema of
@@ -95,12 +98,19 @@ mkConstructorFunctions tn =
                 DataSchema _ handlerArgPosDict -> do
                     {- We need to resolve embeddings for both type variables *and* statically known concrete builtin types.
                     -}
+                    traceM $ "nameTyPairs" <> show nameTyPairs
                     let resolveEmbedding :: ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)
                         resolveEmbedding = resolvePolyRepHandler IntroNode handlerArgPosDict lamArgVars Nothing
                     handledCtorArgs <- Vector.forM nameTyPairs $ \(cArgNm, cArgTy) ->
                         resolveEmbedding cArgTy >>= \case
-                            Nothing -> pure $ pVar cArgNm
-                            Just argHandler -> pure $ pApp argHandler (pVar cArgNm)
+                            Nothing -> do
+                                let res = pVar cArgNm
+                                traceM $ "resolve result " <> show res
+                                pure res
+                            Just argHandler -> do
+                                let res = pApp argHandler (pVar cArgNm)
+                                traceM $ "resolve result " <> show res
+                                pure res
                     case dataEnc of
                         -- TODO: Fill in some of the helpers (plutus_I, listData, etc) and make sure you use the "right version" here
                         SOP -> error "something went horribly wrong, DataSchema w/ SOP encoding"
@@ -122,3 +132,6 @@ mkConstructorFunctions tn =
         mkCtorFnTy datatypeNumParams args =
             let result = Datatype tn (countToTyVars datatypeNumParams)
              in CompN datatypeNumParams (ArgsAndResult args result)
+
+prettyMap :: (Show k, Show v) => Map k v -> String
+prettyMap = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"

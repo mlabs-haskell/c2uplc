@@ -71,6 +71,7 @@ import Covenant.MockPlutus (
  )
 
 import Covenant.ArgDict (preprocess)
+import Covenant.CodeGen.Common
 
 import Control.Monad.Except (runExceptT)
 import Covenant.ExtendedASG (extendedNodes, unExtendedASG)
@@ -113,16 +114,16 @@ compilePretty = fmap pretty . compile
    See: https://github.com/Plutonomicon/plutarch-plutus/blob/treasury-milestone-3/Plutarch/Internal/Term.hs#L829-L853
 -}
 compile :: CompilationUnit -> Either CodeGenError PlutusTerm
-compile cu = trace trace1 $ trace trace2 $ trace trace3 $ fst $ evalRWS (runExceptT act) datatypes M.empty
+compile cu = runTopDownCompile pipelineData pipelineASG
   where
     trace1 = "asg:\n" <> show (prettyNodes [] nodes) <> "\n\n"
-    trace2 = "argDict:\n" <> show argResDict <> "\n\n"
+    -- trace2 = "argDict:\n" <> show argResDict <> "\n\n"
     trace3 = "eNodes:\n" <> (show $ extendedNodes pipelineASG) <> "\n\n"
     datatypes = pipelineData R..! #dtDict
-    (CodeGenM act) = generatePLC pipelineData argResDict nodes
+    -- (CodeGenM act) = generatePLC pipelineData argResDict nodes
     pipelineData = transformASG cu
     pipelineASG = pipelineData R..! #asg
-    argResDict = preprocess pipelineASG
+    -- argResDict = preprocess pipelineASG
     nodes = snd $ unExtendedASG pipelineASG
 
     prettyNodes acc [] = vcat $ reverse acc
@@ -130,64 +131,7 @@ compile cu = trace trace1 $ trace trace2 $ trace trace3 $ fst $ evalRWS (runExce
         let here = "let" <+> pretty i <+> "=" <+> viaShow node
          in prettyNodes (here : acc) rest
 
-data CodeGenError
-    = NoASG
-    | TermNotInContext Id
-    | NoDatatype TyName
-    | ConstructorNotInDatatype TyName ConstructorName
-    | InvalidOpaqueEncoding Text
-    | ArgResolutionFail ArgResolutionFailReason
-    deriving stock (Show, Eq)
-
-data ArgResolutionFailReason
-    = {- | We got @Nothing@ when we tried to look up the context corresponding to the
-      @Id@ of the parent node where the arg was found.
-      -}
-      ParentIdLookupFailed Id
-    | {- | The @Id@ of the parent node of the arg we are examining should index a @Vector Id@ but instead
-      indexes a @Vector Name@.
-      -}
-      ParentIdPointsAtNames Id
-    | -- | The @DeBruijn@ index of the arg points to an out of bounds lambda.
-      DBIndexOutOfBounds DeBruijn
-    | {- | The @Id@ of the lambda corresponding to the @DeBruijn@ index does not correspond to anything in our
-      argument resolution dictionary.
-      -}
-      NoBindingContext Id
-    | {- | The @Id@ of the Lambda that the DeBruijn points at corresponds to an entry in our
-      argument resolution diciontary, but that entry is a @Vector Id@ and not the @Vector Name@
-      that we need
-      -}
-      LamIdPointsAtContext Id
-    deriving stock (Show, Eq)
-
-newtype CodeGenM a = CodeGenM (ExceptT CodeGenError (RWS (Map TyName (DatatypeInfo AbstractTy)) () (Map Id PlutusTerm)) a)
-    deriving
-        ( Functor
-        , Applicative
-        , Monad
-        , MonadReader (Map TyName (DatatypeInfo AbstractTy))
-        , MonadState (Map Id PlutusTerm)
-        , MonadError CodeGenError
-        )
-        via (ExceptT CodeGenError (RWS (Map TyName (DatatypeInfo AbstractTy)) () (Map Id PlutusTerm)))
-
--- N.B. this should always (or almost always) give us a VARIABLE. The state is only a
--- dictionary of terms in case there is some circumstance where we intentionally want to
--- avoid let binding. (I believe in Plutarch it was determined that some constants and/or builtins
--- are cheaper unhoisted for some reason, TODO double check that)
-lookupTerm :: Id -> CodeGenM PlutusTerm
-lookupTerm i =
-    gets (M.lookup i) >>= \case
-        Nothing -> throwError $ TermNotInContext i
-        Just term -> pure term
-
-lookupDatatype :: TyName -> CodeGenM (DatatypeInfo AbstractTy)
-lookupDatatype tn =
-    asks (M.lookup tn) >>= \case
-        Nothing -> throwError $ NoDatatype tn
-        Just info -> pure info
-
+{-
 generatePLC ::
     Rec PipelineData ->
     Map Id (Either (Vector Name) (Vector Id)) ->
@@ -282,14 +226,6 @@ nodeToTerm i argDict node = case node of
 thunkToTerm :: Id -> CodeGenM PlutusTerm
 thunkToTerm = fmap pDelay . lookupTerm
 
-litToTerm :: AConstant -> CodeGenM PlutusTerm
-litToTerm = \case
-    AUnit -> pure $ mkConstant () ()
-    ABoolean b -> pure $ mkConstant () b
-    AnInteger i -> pure $ mkConstant () i
-    AByteString bs -> pure $ mkConstant () bs
-    AString txt -> pure $ mkConstant () txt
-
 lamToTerm ::
     Map Id (Either (Vector Name) (Vector Id)) -> -- our argument resolution dictionary
     Id -> -- the Id of the lambda node
@@ -340,7 +276,7 @@ refToTerm parentId argDict = \case
                         Just hopefullyNames -> case hopefullyNames of
                             Left namesForReal -> pure . pVar $ namesForReal Vector.! ixInt
                             Right _ -> throwError $ ArgResolutionFail (LamIdPointsAtContext bindingLamId)
-
+-}
 -- TODO: Need to rework this to ignore synthetic (compiler generated) nodes since we really really really
 --       want to make sure they definitely get let bound
 countOccurs :: Id -> [ASGNode] -> Int

@@ -26,7 +26,7 @@ import Prettyprinter
 
 import Covenant.DeBruijn (DeBruijn (..))
 import Covenant.Index
-import Covenant.MockPlutus (betterPrettyPlutus)
+import Covenant.MockPlutus (prettyPTerm)
 import Covenant.Test (unsafeMkDatatypeInfos)
 import Data.Either (isRight)
 import Test.Tasty
@@ -57,11 +57,11 @@ testCompile dtDict builder = case mkASG dtDict builder of
     Right cu -> case compile cu of
         Left cgErr -> Left $ show (CodeGenFail cgErr)
         Right resTerm -> do
-            traceM $ "\n" <> show (betterPrettyPlutus resTerm) <> "\n"
+            traceM $ "\n" <> show (prettyPTerm resTerm) <> "\n"
             case evalTerm resTerm of
                 Left errMsg -> Left errMsg
                 Right evaluated -> do
-                    traceM $ "\nevaluated:\n" <> show (betterPrettyPlutus evaluated)
+                    traceM $ "\nevaluated:\n" <> show (prettyPTerm evaluated)
                     pure evaluated
 
 maybeT :: DataEncoding -> DataDeclaration AbstractTy
@@ -95,6 +95,12 @@ addTwoNumbers = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
     two <- AnId <$> lit (AnInteger 2)
     plus <- builtin2 AddInteger
     AnId <$> app' plus [one, two]
+
+mkJust :: ASGBuilder Id
+mkJust = lam (Comp0 $ ReturnT (Datatype "Maybe" [BuiltinFlat IntegerT])) $ do
+    zero <- AnId <$> lit (AnInteger 0)
+    two <- AnId <$> lit (AnInteger 2)
+    AnId <$> ctor' "Maybe" "Just" [two]
 
 matchOnMaybeInt :: ASGBuilder Id
 matchOnMaybeInt = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do

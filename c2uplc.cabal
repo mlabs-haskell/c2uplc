@@ -107,6 +107,7 @@ library
   exposed-modules:
     Covenant.ArgDict
     Covenant.CodeGen
+    Covenant.CodeGen.Common
     Covenant.Concretify
     Covenant.ExtendedASG
     Covenant.MockPlutus
