@@ -107,59 +107,56 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 -- projection or embedding handlers to app nodes which result from
                 -- our type fixer -> app node transform.
                 pure ()
+            Just (TyFixerFnData _ SOP _ _ _ _ _) -> pure ()
             Just (TyFixerFnData tn enc _polyTyNoHandlers _compiled schema _nm kind) -> do
-                -- if the datatype the synthetic function originated from is SOP encoded, we don't need
-                -- to do anything.
-                when (enc == SOP) $ pure ()
-                unless (enc == SOP) $ do
-                    -- we need to extract the "function type with handlers added" from the schema, which in this branch has to be a data schema
-                    (polyWithHandlers, _handlerArgPosDict) <- case schema of
-                        SOPSchema{} -> traceError $ "SOP schema mismatch in " <> show tn <> " " <> show enc
-                        DataSchema ty dict -> pure (ty, dict)
-                    let CompN _ (ArgsAndResult polyArgsWithHandlers _) = polyWithHandlers
-                        CompN _ (ArgsAndResult concreteArgsNoHandlers _) = cFunTy
-                        -- we need to get at the handlers to determine their types
-                        handlerFnTys = Vector.drop (Vector.length concreteArgsNoHandlers) polyArgsWithHandlers
-                    -- while we *really* should just record the handler type order as a vector in our TyFixerFnData (TODO: Do it),
-                    -- we know that they are all Comp0 identity functions with only tyvar params, so we can get what we need by doing...
-                    handlerIndices <- Vector.forM handlerFnTys $ \case
-                        ThunkT (Comp0 ((Abstraction (BoundAt _ i)) :--:> ReturnT _)) -> pure i
-                        other -> traceError $ "Encountered an invalid type when adding projection/embedding handlers: " <> show other
-                    -- we can mash the next two steps together. they are:
-                    --   1. Look up the concrete type that the tyvar it "handles" is instantiated to
-                    --   2. check whether that type is a representationally amorphous primitive (i.e. whether it's Int or ByteString -_- all of this
-                    --      for those two types!) and if so, find the `Id` corresponding to its projection or embedding (we select based on the node kind
-                    --      in our TyFixerFnData)
-                    -- NOTE/IMPORTANT: Technically we are using computation types in a value type place here but that *shouldn't* matter.
-                    --                 If I'm wrong we need to insert some additional nodes to thunk the dummy handlers and then force them, but
-                    --                 since this is the last step before codegen we should be fine to not do that.
-                    projEmbedHandlers <- asks (R..! #builtinHandlers)
-                    identityFn <- forgetExtendedId <$> asks (R..! #identityFn)
-                    extraProjEmbArgs <- Vector.forM handlerIndices $ \hIndx ->
-                        case M.lookup hIndx concretifications of
-                            Nothing ->
-                                traceError $
-                                    "Could not locate a concretification for tyvar "
-                                        <> show hIndx
-                                        <> " while resolving projection/embedding types for "
-                                        <> show tn
-                                        <> " "
-                                        <> show kind
-                            Just (BuiltinFlat bi) -> case M.lookup bi projEmbedHandlers of
-                                Nothing -> pure $ AnId identityFn
-                                Just repPolyHandler -> case kind of
-                                    MatchNode -> pure . AnId $ project repPolyHandler
-                                    CataNode -> pure . AnId $ project repPolyHandler
-                                    IntroNode -> pure . AnId $ embed repPolyHandler
-                            _ -> pure $ AnId identityFn
-                    -- We don't actually *have* to fix the concretified type annotation in the app node, but
-                    -- it doesn't really hurt if we do and might save us during debugging
-                    let newConcreteFunTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) polyWithHandlers
-                        newNode = AValNode rTy $ AppInternal fn (args <> extraProjEmbArgs) instTys newConcreteFunTy
-                    -- again we don't *have* to do this but we might as well keep things correct.
-                    -- This just sets the synthetic function node to have the correct type.
-                    coerceCompNodeTy fn polyWithHandlers
-                    eInsert appId newNode
+                -- we need to extract the "function type with handlers added" from the schema, which in this branch has to be a data schema
+                (polyWithHandlers, _handlerArgPosDict) <- case schema of
+                    SOPSchema{} -> traceError $ "SOP schema mismatch in " <> show tn <> " " <> show enc
+                    DataSchema ty dict -> pure (ty, dict)
+                let CompN _ (ArgsAndResult polyArgsWithHandlers _) = polyWithHandlers
+                    CompN _ (ArgsAndResult concreteArgsNoHandlers _) = cFunTy
+                    -- we need to get at the handlers to determine their types
+                    handlerFnTys = Vector.drop (Vector.length concreteArgsNoHandlers) polyArgsWithHandlers
+                -- while we *really* should just record the handler type order as a vector in our TyFixerFnData (TODO: Do it),
+                -- we know that they are all Comp0 identity functions with only tyvar params, so we can get what we need by doing...
+                handlerIndices <- Vector.forM handlerFnTys $ \case
+                    ThunkT (Comp0 ((Abstraction (BoundAt _ i)) :--:> ReturnT _)) -> pure i
+                    other -> traceError $ "Encountered an invalid type when adding projection/embedding handlers: " <> show other
+                -- we can mash the next two steps together. they are:
+                --   1. Look up the concrete type that the tyvar it "handles" is instantiated to
+                --   2. check whether that type is a representationally amorphous primitive (i.e. whether it's Int or ByteString -_- all of this
+                --      for those two types!) and if so, find the `Id` corresponding to its projection or embedding (we select based on the node kind
+                --      in our TyFixerFnData)
+                -- NOTE/IMPORTANT: Technically we are using computation types in a value type place here but that *shouldn't* matter.
+                --                 If I'm wrong we need to insert some additional nodes to thunk the dummy handlers and then force them, but
+                --                 since this is the last step before codegen we should be fine to not do that.
+                projEmbedHandlers <- asks (R..! #builtinHandlers)
+                identityFn <- forgetExtendedId <$> asks (R..! #identityFn)
+                extraProjEmbArgs <- Vector.forM handlerIndices $ \hIndx ->
+                    case M.lookup hIndx concretifications of
+                        Nothing ->
+                            traceError $
+                                "Could not locate a concretification for tyvar "
+                                    <> show hIndx
+                                    <> " while resolving projection/embedding types for "
+                                    <> show tn
+                                    <> " "
+                                    <> show kind
+                        Just (BuiltinFlat bi) -> case M.lookup bi projEmbedHandlers of
+                            Nothing -> pure $ AnId identityFn
+                            Just repPolyHandler -> case kind of
+                                MatchNode -> pure . AnId $ project repPolyHandler
+                                CataNode -> pure . AnId $ project repPolyHandler
+                                IntroNode -> pure . AnId $ embed repPolyHandler
+                        _ -> pure $ AnId identityFn
+                -- We don't actually *have* to fix the concretified type annotation in the app node, but
+                -- it doesn't really hurt if we do and might save us during debugging
+                let newConcreteFunTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) polyWithHandlers
+                    newNode = AValNode rTy $ AppInternal fn (args <> extraProjEmbArgs) instTys newConcreteFunTy
+                -- again we don't *have* to do this but we might as well keep things correct.
+                -- This just sets the synthetic function node to have the correct type.
+                coerceCompNodeTy fn polyWithHandlers
+                eInsert appId newNode
     cleanupAppNode _ node _ = traceError $ "Passed something that wasn't an app node to cleanupAppNode: " <> show node
 
     coerceCompNodeTy :: Id -> CompT AbstractTy -> RWS (Rec ConcretifyCxt) () ExtendedASG ()

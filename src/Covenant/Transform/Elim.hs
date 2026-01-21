@@ -22,6 +22,7 @@ import Covenant.MockPlutus (
     pForce,
     pLam,
     pVar,
+    ppTerm,
     unIData,
     unListData,
  )
@@ -32,7 +33,10 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Optics.Core (view)
 
+import Covenant.ArgDict (pName, pValT, pValTs, pVec)
 import Covenant.Transform.Common
+import Debug.Trace (traceM)
+import UntypedPlutusCore ()
 
 {- NOTE: The type of the "function part" is just going to be the BBF (plus unwrappers),
          since we always apply the scrutinee and handler functions "all at once" with the
@@ -83,7 +87,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                             <> show bbfErr
                 Right matchFunTy -> do
                     let enc = view #datatypeEncoding ogDecl
-                    let schema = mkTypeSchema enc matchFunTy
+                    let schema = mkTypeSchema False enc matchFunTy
                     let matchFunName = "match_" <> tyNameInner
                     compiled <- genElimFormPLC matchFunTy matchFunName enc schema
                     let here =
@@ -134,14 +138,27 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
 
             -- We ignore the "extra unwrapper args" here because we're trying to get the names of the handlers for each
             -- match arm (and we have another way of looking up the unwrappers when we need to)
-            branchHandlers :: Vector PlutusTerm
-            branchHandlers =
+            rawBranchHandlers :: Vector PlutusTerm
+            rawBranchHandlers =
                 let numHandlers = Vector.length origMatchFnArgs - 1
-                 in pForce . pVar <$> Vector.slice 1 numHandlers lamArgNames
+                 in pVar <$> Vector.slice 1 numHandlers lamArgNames
 
+            -- inserts forces if the types say we need them
+            insertForce :: (ValT AbstractTy, PlutusTerm) -> (ValT AbstractTy, PlutusTerm)
+            insertForce (v, t) = case v of
+                ThunkT{} -> (v, pForce t)
+                _ -> (v, t)
             typedBranchHandlers :: Vector (ValT AbstractTy, PlutusTerm)
-            typedBranchHandlers = Vector.zip (Vector.drop 1 origMatchFnArgs) branchHandlers
+            typedBranchHandlers = insertForce <$> Vector.zip (Vector.drop 1 origMatchFnArgs) rawBranchHandlers
 
+            (_, branchHandlers) = Vector.unzip typedBranchHandlers
+        traceM $
+            "genElimPLC:\n  matchFnArgs: "
+                <> pVec pValT matchFnArgs
+                <> "\n  lamArgNames: "
+                <> pVec pName lamArgNames
+                <> "\n branchHandlers: "
+                <> pVec ppTerm rawBranchHandlers
         case schema of
             SOPSchema _ ->
                 {- This is the easiest one. We do the only thing we could possibly do.
@@ -151,7 +168,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 -- This lets us look up the name (i.e. the var bound by our lambda) which corresponds to the
                 -- projection/embedding function we need to use for a particular value with a bare tyvar type
                 let resolveUnwrapper :: ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)
-                    resolveUnwrapper = resolvePolyRepHandler MatchNode handlerArgPosDict branchHandlers Nothing
+                    resolveUnwrapper = resolvePolyRepHandler MatchNode handlerArgPosDict lamArgVars Nothing
 
                 case enc of
                     SOP -> error $ "Data schema for SOP encoding when compiling match functions for " <> T.unpack tyNameInner
@@ -177,20 +194,22 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                                         "CodeGen failure while generating PLC match function for type "
                                             <> T.unpack tyNameInner
                                             <> ": No handler for single ProductListData ctor"
-                                Just thisBranchHandler -> case thisBranchHandler of
-                                    -- In the generated match function we do not ever construct a (ThunkT (ReturnT v))
-                                    -- value, so we should be able to ignore the possibility.
-                                    ThunkT (CompN _ (ArgsAndResult thisBranchHandlerArgTys _)) -> do
-                                        listEliminator <-
-                                            genFiniteListEliminator
-                                                (lamArgVars Vector.! 1)
-                                                (unListData scrutinee)
-                                                resolveUnwrapper
-                                                (Vector.toList thisBranchHandlerArgTys)
-                                        pure . lamBuilder $ listEliminator
-                                    _ ->
-                                        -- Anything else means we have a nullary constructor and can bypass any hard work here
-                                        pure . lamBuilder $ branchHandlers Vector.! 1
+                                Just thisBranchHandler -> do
+                                    traceM $ "\n  thisBranchHandlerTy: " <> show thisBranchHandler
+                                    case thisBranchHandler of
+                                        -- In the generated match function we do not ever construct a (ThunkT (ReturnT v))
+                                        -- value, so we should be able to ignore the possibility.
+                                        ThunkT (CompN _ (ArgsAndResult thisBranchHandlerArgTys _)) -> do
+                                            listEliminator <-
+                                                genFiniteListEliminator
+                                                    (lamArgVars Vector.! 1)
+                                                    (unListData scrutinee)
+                                                    resolveUnwrapper
+                                                    (Vector.toList thisBranchHandlerArgTys)
+                                            pure . lamBuilder $ listEliminator
+                                        _ ->
+                                            -- Anything else means we have a nullary constructor and can bypass any hard work here
+                                            pure . lamBuilder $ branchHandlers Vector.! 1
                         ConstrData -> do
                             {- See comments on `pCaseConstrData` in Covenant.Transform.Common for an explanation
                                of exactly how this works. The general idea is that we use casing on the constructor index
@@ -204,7 +223,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
 
                               -- NOTE/FIXME: (STILL LIVE 12/30) WE DO NOT NEED TO DO EMBEDDINGS OR PROJECTIONS HERE
                             -}
-                            let thisBranchHandlerTerm = lamArgVars Vector.! 1
+                            let thisBranchHandlerTerm = branchHandlers Vector.! 0
                                 realScrutTy = case origMatchFnArgs Vector.! 1 of
                                     ThunkT (CompN _ (ArgsAndResult args _)) -> args Vector.! 0
                                     _ -> error $ T.unpack tyNameInner <> " has a newtype encoding, is not a valid newtype"

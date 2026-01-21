@@ -79,7 +79,7 @@ import Covenant.MockPlutus (
     prettyPTerm,
  )
 
-import Covenant.ArgDict (preprocess)
+import Covenant.ArgDict ()
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.State (State, execState, runState)
@@ -94,6 +94,7 @@ import Data.Maybe (isJust)
 import Data.Row.Records (HasType, KnownSymbol, Label, Rec, (.+), (.==), type (.+), type (.==))
 import Data.Row.Records qualified as R
 import Data.Set (Set)
+import Data.Set qualified as S
 import Data.Traversable (forM)
 import Debug.Trace
 import Debug.Trace (traceM)
@@ -304,6 +305,7 @@ prepare ::
 prepare plData eAsg = do
     modify $ R.update #onlySrcNodes (M.mapKeys forgetExtendedId srcNodes)
     traverse_ (go . forgetExtendedId) (M.keys specialNodes)
+    modify $ rModify reverse #bind
   where
     (specialNodes, srcNodes) = M.partitionWithKey (\k _ -> isSynthNode k) eNodes
     eNodes = extendedNodes eAsg
@@ -317,6 +319,7 @@ prepare plData eAsg = do
 
     tyFixers = plData R..! #tyFixers
     stubs = plData R..! #handlerStubs
+
     go i = case M.lookup i tyFixers of
         Just (TyFixerFnData _ _ _ thisTermCompiled _ nm _) -> do
             let UnsafeMkId iInner = i
@@ -501,3 +504,76 @@ partitionM p =
                 False -> pure $ second (Vector.cons x) acc
         )
         (Vector.empty, Vector.empty)
+
+data LiftStatus
+    = -- We can let- bind this thing atomically using our normal top-down compilation process
+      AtomicLiftable
+    | -- We have to compile the whole thing without any internal lifting/let-binding, but
+      -- if we do that, we're OK to let bind
+      InlineLiftable
+    | -- We cannot lift.
+      NoLift
+    | -- We can lift without breaking things but doing so would not help script size
+      OptionalLift
+    deriving stock (Show, Eq, Ord)
+
+instance Semigroup LiftStatus where
+    NoLift <> _ = NoLift
+    _ <> NoLift = NoLift
+    AtomicLiftable <> InlineLiftable = InlineLiftable
+    InlineLiftable <> AtomicLiftable = InlineLiftable
+    AtomicLiftable <> AtomicLiftable = AtomicLiftable
+    InlineLiftable <> InlineLiftable = InlineLiftable
+    OptionalLift <> x = x
+    x <> OptionalLift = x
+
+instance Monoid LiftStatus where
+    mempty = OptionalLift
+
+-- first arg is the thing we're looking for, second arg is the starting point
+countOccurs ::
+    Id ->
+    Id ->
+    CodeGenM Int
+countOccurs toCount start =
+    nodeOrVar start >>= \case
+        Left _ -> pure 0
+        Right aNode -> case aNode of
+            ACompNode _ compNodeInfo -> case compNodeInfo of
+                Force r -> countRef r
+                Lam r -> countRef r
+                _ -> pure 0
+            AValNode _ valNodeInfo -> case valNodeInfo of
+                App fn args _ _ -> (+) <$> countId fn <*> (sum <$> traverse countRef args)
+                Thunk i -> countId i
+                _ -> pure 0
+  where
+    countId i
+        | i == toCount = pure 1
+        | otherwise = pure 0
+
+    countRef = \case
+        AnId i -> countId i
+        AnArg _ -> pure 0
+
+-- gets every arg out of a term recursively and resolves the DB to an Int relative to the given starting point
+collectAndResolveArgs :: Int -> Id -> CodeGenM (Set Int)
+collectAndResolveArgs dbOff start =
+    nodeOrVar start >>= \case
+        Left _ -> pure S.empty
+        Right aNode -> case aNode of
+            ACompNode _ compInfo -> case compInfo of
+                Force r -> goRef dbOff r
+                Lam r -> goRef (dbOff + 1) r
+                _other -> pure S.empty
+            AValNode _ valInfo -> case valInfo of
+                App fn args _ _ -> do
+                    fnRes <- collectAndResolveArgs dbOff fn
+                    argsRes <- S.unions <$> traverse (goRef dbOff) args
+                    pure $ fnRes <> argsRes
+                Thunk i -> collectAndResolveArgs dbOff i
+                _ -> pure S.empty
+  where
+    goRef offset = \case
+        AnArg (UnsafeMkArg db _ _) -> pure . S.singleton $ (review asInt db - offset)
+        AnId i -> collectAndResolveArgs dbOff i

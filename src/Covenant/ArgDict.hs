@@ -2,7 +2,7 @@
 
 {- HLINT ignore "Use <$>" -}
 -- Seriously WTF this makes things so much uglier!
-module Covenant.ArgDict (preprocess) where
+module Covenant.ArgDict where
 
 import Data.Word (Word64)
 
@@ -16,30 +16,159 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, ask, evalRWS, get, local, modify)
+import Control.Monad.RWS.Strict (MonadTrans (lift), RWS, ask, evalRWS, get, local, modify)
 
 import Covenant.ASG (
     ASG,
     ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
+    CompNodeInfo (Builtin1, Builtin2, Builtin3, Builtin6, Force, Lam),
     Id,
     Ref (AnArg, AnId),
     ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
     nodeAt,
     topLevelId,
  )
-import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult))
+import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult), TyName (TyName), ValT (..))
 
-import Covenant.DeBruijn (DeBruijn (Z))
+import Covenant.DeBruijn (DeBruijn (Z), asInt)
 import Covenant.ExtendedASG
 import Covenant.Index (Index, intCount, intIndex)
-import Covenant.Test (Id (UnsafeMkId))
-import Covenant.Transform.Pipeline.Common ()
+import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId))
+
+import Control.Monad.Trans.Reader (ReaderT)
+import Covenant.Constant (AConstant (..))
 import Covenant.Transform.TyUtils
 import Data.Maybe (fromJust)
 import Optics.Core (preview, review)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import Prettyprinter
 
+-- I need some of this to make debugging faster (the time spent writing this will save me
+-- more time debugging than it takes), it should be somewhere else eventually
+
+prettyLam :: forall ann. Doc ann -> Doc ann -> Doc ann
+prettyLam var body =
+    align . group $
+        "\\" <> var <+> "->" <> line <> nest 2 body
+
+data PrettyContext ann
+    = PrettyContext
+        (Vector Id) -- Lambda IDs
+        (Map Id (Vector (Doc ann)))
+
+matchLike :: Doc ann -> Doc ann -> Vector (Doc ann) -> Doc ann
+matchLike prefix scrut handlers =
+    group $
+        prefix
+            <+> scrut
+            <+> line
+            <+> group (indent 2 . braces . vcat . punctuate ";" . Vector.toList $ handlers)
+
+pName :: Name -> String
+pName (Name txtPart _) = T.unpack txtPart
+
+pVec :: forall a. (a -> String) -> Vector a -> String
+pVec f v = "[" <> foldr (\x acc -> if null acc then f x else f x <> ", " <> acc) "" (Vector.toList v) <> "]"
+
+pValTs :: Vector (ValT AbstractTy) -> String
+pValTs = show . list . Vector.toList . fmap (prettyValT False)
+
+pValT :: ValT AbstractTy -> String
+pValT = show . prettyValT False
+
+prettyValT :: forall ann. Bool -> ValT AbstractTy -> Doc ann
+prettyValT needParens = \case
+    Abstraction (BoundAt db i) ->
+        let db' = review asInt db
+            i' = review intIndex i
+         in "a_" <> pretty db' <> "#" <> pretty i'
+    ThunkT compT -> angles $ prettyCompT compT
+    BuiltinFlat biFlat -> viaShow biFlat
+    Datatype (TyName tn) args ->
+        let unary = null args
+            args' = hsep . map (prettyValT True) . Vector.toList $ args
+         in if unary
+                then pretty tn
+                else
+                    if needParens
+                        then
+                            parens
+                                (pretty tn <+> args')
+                        else pretty tn <+> args'
+
+pCompT :: CompT AbstractTy -> String
+pCompT = show . prettyCompT
+
+prettyCompT :: forall ann. CompT AbstractTy -> Doc ann
+prettyCompT (CompN cnt (ArgsAndResult args result)) = mkForall <> "." <+> mkFn
+  where
+    mkForall = ("forall" <+>) . hsep . Vector.toList $ Vector.imap (\i _ -> "a_0" <> "#" <> pretty i) (countToTyVars cnt)
+    pArgs = Vector.toList $ prettyValT False <$> args
+    pRes = "!" <> prettyValT True result
+    mkFn = hsep $ punctuate " ->" (pArgs <> [pRes])
+
+simplePrettyASG ::
+    forall m ann.
+    (Monad m) =>
+    (Id -> m ASGNode) ->
+    Id ->
+    ASGNode ->
+    ReaderT (PrettyContext ann) m (Doc ann)
+simplePrettyASG lookupNode thisId@(UnsafeMkId i) = \case
+    AnError -> pure "ERROR"
+    ACompNode compT compNode -> case compNode of
+        Lam ref -> step compT $ \boundVars -> do
+            let boundVars' = hsep $ Vector.toList boundVars
+            body <- goRef ref
+            pure $ prettyLam boundVars' body
+        Force fRef -> ("!" <>) . parens <$> goRef fRef
+        Builtin1 bi1 -> pure $ viaShow bi1
+        Builtin2 bi2 -> pure $ viaShow bi2
+        Builtin3 bi3 -> pure $ viaShow bi3
+        Builtin6 bi6 -> pure $ viaShow bi6
+    AValNode valT valInfo -> case valInfo of
+        Lit aConstant -> case aConstant of
+            AnInteger i -> pure $ pretty i
+            ABoolean b -> pure $ pretty b
+            AUnit -> pure $ pretty ()
+            AByteString bs -> pure $ viaShow bs
+            AString t -> pure $ pretty t
+        app@(App fn args _ _) -> do
+            prettyFn <- lift (lookupNode fn) >>= simplePrettyASG lookupNode fn
+            pargs <- Vector.toList <$> traverse goRef args
+            pure $ align . group . encloseSep "" "" " # " $ (prettyFn : pargs)
+        Thunk child -> undefined
+        Cata ty handlers arg -> matchLike "cata" <$> goRef arg <*> traverse goRef handlers
+        DataConstructor tn cn args -> undefined
+        Match scrut handlers -> matchLike "match" <$> goRef scrut <*> traverse goRef handlers
+  where
+    goRef :: Ref -> ReaderT (PrettyContext ann) m (Doc ann)
+    goRef = \case
+        AnId argId -> lift (lookupNode argId) >>= \argNode -> simplePrettyASG lookupNode argId argNode
+        AnArg (UnsafeMkArg argDb' argIx' argTy) -> do
+            let argDb = review asInt argDb'
+                argIx = review intIndex argIx'
+                -- \$arg(db,index) is how we indicate a "rigid" term var  we can't resolve
+                -- (probably b/c it points to something outside of the fragment)
+                unresolvedArg = "$arg" <> tupled [pretty argDb, pretty argIx]
+            PrettyContext lamStack cxt <- ask
+            case lamStack Vector.!? argDb of
+                Nothing -> pure unresolvedArg
+                Just bindingLam -> case M.lookup bindingLam cxt of
+                    Nothing -> pure unresolvedArg
+                    Just boundVars -> case boundVars Vector.!? argIx of
+                        Nothing -> pure unresolvedArg
+                        Just v -> pure v
+    step :: CompT AbstractTy -> (Vector (Doc ann) -> ReaderT (PrettyContext ann) m a) -> ReaderT (PrettyContext ann) m a
+    step compT cont = do
+        let vars = mkVars compT
+            localF (PrettyContext lamStack cxt) = PrettyContext (Vector.cons thisId lamStack) (M.insert thisId vars cxt)
+        local localF (cont vars)
+    mkVars :: CompT AbstractTy -> Vector (Doc ann)
+    mkVars (CompN _ (ArgsAndResult args _)) =
+        Vector.imap (\argpos _ -> "x_" <> pretty i <> "#" <> pretty argpos) args
+
+{-
 preprocess :: ExtendedASG -> Map Id (Either (Vector Name) (Vector Id))
 preprocess asg = fst $ evalRWS go mempty asg
   where
@@ -98,3 +227,4 @@ mkArgResolutionDict i =
         here <- Right <$> ask
         there <- act
         pure . safeInsert i here $ there
+-}

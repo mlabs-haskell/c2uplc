@@ -1,6 +1,7 @@
 {- HLINT ignore "Use if" -}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE StrictData #-}
+
 module Covenant.Transform.Schema where
 
 import Data.Map (Map)
@@ -9,7 +10,6 @@ import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-
 
 import Covenant.Type (
     AbstractTy (BoundAt),
@@ -20,11 +20,14 @@ import Covenant.Type (
     tyvar,
  )
 
+import Covenant.ArgDict (pCompT)
 import Covenant.DeBruijn (DeBruijn (S, Z))
-import Covenant.Index (Index)
+import Covenant.Index (Index, intCount, intIndex)
 import Data.Foldable (
     foldl',
  )
+import Debug.Trace (trace)
+import Optics.Core (preview, review)
 
 {- This module contains functions (and types) for resolving the argument position of "extra handler args".
 
@@ -95,6 +98,8 @@ schemaFnArgs s = case schemaFnType s of
     (CompN _ (ArgsAndResult args _)) -> args
 
 mkTypeSchema ::
+    -- "Is it an intro node?" - controls whether we expect an 'r' tyVar which we have to ignore in match/cata
+    Bool ->
     DataEncoding ->
     -- The function type. This should be the
     -- "generated" function type, e.g. the thing we get
@@ -102,7 +107,7 @@ mkTypeSchema ::
     -- (or whatever)
     CompT AbstractTy ->
     TypeSchema
-mkTypeSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataEnc of
+mkTypeSchema isIntro dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataEnc of
     SOP -> SOPSchema fnTy
     -- All of our "Builtin" types (i.e. types that we pretend are ADTs but which are really onchain primitives,
     -- such as list, pair, etc) are "morally data encoded" (in the sense that they need projections and embeddings
@@ -114,7 +119,7 @@ mkTypeSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataE
         -- arguments to insert proj/embed handlers. Also, this lets us safely assume that the vector isn't empty
         -- going forward, which is useful to avoid out of bounds errors
         if lenOrigArgs == 0
-            then SOPSchema fnTy
+            then DataSchema fnTy M.empty
             else
                 let extraArgBundle :: (Int, Map (Index "tyvar") Int, Vector (ValT AbstractTy))
                     extraArgBundle =
@@ -139,16 +144,33 @@ mkTypeSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataE
                     (_, handlerDict, extraHandlerArgs) = extraArgBundle
 
                     fnTyWithHandlers = CompN tvCnt $ ArgsAndResult (args <> extraHandlerArgs) result
-                 in DataSchema fnTyWithHandlers handlerDict
+                    msg' = msg <> "\n  result: " <> pCompT fnTyWithHandlers
+                 in trace msg' $ DataSchema fnTyWithHandlers handlerDict
   where
+    msg =
+        "\nmkTypeSchema\n  fnTy: "
+            <> pCompT fnTy
+            <> "\n  allUsedTyVarIndices: "
+            <> show allUsedTyVarIndices
     lenOrigArgs = Vector.length args
     allUsedTyVarIndices :: [Index "tyvar"]
     allUsedTyVarIndices =
         S.toList
             . S.fromList
+            . (if isIntro then id else cleanup)
             . concatMap collectIndices
             . Vector.toList
             $ args
+    -- We don't ever care about the 'r' variable - we never need to project or embed it
+    -- so we can just remove it from our list. Have to be careful to only ever use this
+    -- on Match/Cata since Intro doesn't have an "output tyvar"
+    cleanup :: [Index "tyvar"] -> [Index "tyvar"]
+    cleanup = filter (not . isR)
+      where
+        isR :: Index "tyvar" -> Bool
+        isR indx = review intIndex indx == rIndx
+        rIndx = review intCount tvCnt - 1
+
     collectIndices :: ValT AbstractTy -> [Index "tyvar"]
     collectIndices = \case
         Abstraction (BoundAt _ indx) -> [indx]

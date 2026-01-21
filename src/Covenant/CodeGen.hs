@@ -70,7 +70,7 @@ import Covenant.MockPlutus (
     plutus_ConstrData,
  )
 
-import Covenant.ArgDict (preprocess)
+import Covenant.ArgDict ()
 import Covenant.CodeGen.Common
 
 import Control.Monad.Except (runExceptT)

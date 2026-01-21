@@ -79,6 +79,56 @@ maybeSOP = maybeT SOP
 maybeData :: DataDeclaration AbstractTy
 maybeData = maybeT (PlutusData Covenant.Type.ConstrData)
 
+abcT :: DataDeclaration AbstractTy
+abcT =
+    DataDeclaration
+        "ABC"
+        count0
+        [ Constructor "A" []
+        , Constructor "B" []
+        , Constructor "C" []
+        ]
+        (PlutusData EnumData)
+
+myListT :: DataEncoding -> DataDeclaration AbstractTy
+myListT =
+    DataDeclaration
+        "MyList"
+        count1
+        [ Constructor "MyNil" []
+        , Constructor "MyCons" [tyvar Z ix0, Datatype "MyList" [tyvar Z ix0]]
+        ]
+
+myListSOP :: DataDeclaration AbstractTy
+myListSOP = myListT SOP
+
+myListData :: DataDeclaration AbstractTy
+myListData = myListT (PlutusData Covenant.Type.ConstrData)
+
+productT :: DataEncoding -> DataDeclaration AbstractTy
+productT =
+    DataDeclaration
+        "Product"
+        count1
+        [Constructor "Product" [BuiltinFlat IntegerT, tyvar Z ix0]]
+
+productData :: DataDeclaration AbstractTy
+productData = productT (PlutusData ProductListData)
+
+productSOP :: DataDeclaration AbstractTy
+productSOP = productT SOP
+
+myNewtype :: DataDeclaration AbstractTy
+myNewtype =
+    DataDeclaration
+        "Newtype"
+        count1
+        [Constructor "Newtype" [tyvar Z ix0]]
+        (PlutusData NewtypeData)
+
+testLam :: ValT AbstractTy -> ASGBuilder Ref -> ASGBuilder Id
+testLam retT = lam (Comp0 $ ReturnT retT)
+
 mkASG ::
     forall a.
     Vector (DataDeclaration AbstractTy) ->
@@ -112,3 +162,32 @@ matchOnMaybeInt = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
         justWhat <- arg Z ix0
         AnId <$> app' plus [AnArg justWhat, AnArg justWhat]
     AnId <$> match just2 [zero, AnId justHandler]
+
+introEnum :: ASGBuilder Id
+introEnum = lam (Comp0 $ ReturnT (Datatype "ABC" [])) $ AnId <$> ctor' "ABC" "A" []
+
+elimEnum :: ASGBuilder Id
+elimEnum = lam (Comp0 $ ReturnT (BuiltinFlat IntegerT)) $ do
+    myABC <- AnId <$> ctor' "ABC" "A" []
+    one <- AnId <$> lit (AnInteger 2)
+    two <- AnId <$> lit (AnInteger 3)
+    three <- AnId <$> lit (AnInteger 4)
+    AnId <$> match myABC [one, two, three]
+
+introProduct :: ASGBuilder Id
+introProduct = lam (Comp0 $ ReturnT (Datatype "Product" [BuiltinFlat BoolT])) $ do
+    one <- AnId <$> lit (AnInteger 1)
+    fawlse <- AnId <$> lit (ABoolean False)
+    AnId <$> ctor' "Product" "Product" [one, fawlse]
+
+introNewtype :: ASGBuilder Id
+introNewtype = testLam (Datatype "Newtype" [BuiltinFlat IntegerT]) $ do
+    one <- AnId <$> lit (AnInteger 1)
+    AnId <$> ctor' "Newtype" "Newtype" [one]
+
+elimNewtype :: ASGBuilder Id
+elimNewtype = testLam (BuiltinFlat IntegerT) $ do
+    one <- AnId <$> lit (AnInteger 1)
+    myNT <- AnId <$> ctor' "Newtype" "Newtype" [one]
+    idF <- lazyLam (Comp1 $ BuiltinFlat IntegerT :--:> ReturnT (BuiltinFlat IntegerT)) $ AnArg <$> arg Z ix0
+    AnId <$> match myNT [AnId idF]

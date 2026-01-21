@@ -27,6 +27,7 @@ import Covenant.MockPlutus (
     PlutusTerm,
     pApp,
     pCase,
+    pForce,
     pLam,
     pVar,
  )
@@ -69,7 +70,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                                     <> show bbfErr
                         Right (unsafeUnThunk -> cataFunTy) -> do
                             let enc = view #datatypeEncoding nonOpaqueDecl
-                            let schema = mkTypeSchema enc cataFunTy
+                            let schema = mkTypeSchema False enc cataFunTy
                                 cataFunName = "cata_" <> tyNameInner
                             compiled <- pFix =<< genCataPLC cataFunTy cataFunName enc schema
                             let here =
@@ -148,8 +149,13 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 -- just drop the first element of the vector of cata fn arg types.
                 Vector.drop 1 origCataFnArgs
 
+            insertForce :: (ValT AbstractTy, PlutusTerm) -> (ValT AbstractTy, PlutusTerm)
+            insertForce (v, t) = case v of
+                ThunkT{} -> (v, pForce t)
+                _ -> (v, t)
+
             typedHandlers :: Vector (ValT AbstractTy, PlutusTerm)
-            typedHandlers = Vector.zip armHandlerTypes armHandlers
+            typedHandlers = insertForce <$> Vector.zip armHandlerTypes armHandlers
         case schema of
             SOPSchema _ -> do
                 -- \*Conceptually* this is simple. E.g. for List (pretend it's SOP encoded here) we want to generate something like:

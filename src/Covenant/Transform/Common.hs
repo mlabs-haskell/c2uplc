@@ -62,6 +62,7 @@ import Covenant.Data (DatatypeInfo)
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (Count, Index, intCount, intIndex)
 
+import Covenant.ArgDict (pValT, pVec)
 import Covenant.ExtendedASG
 import Covenant.MockPlutus (
     PlutusTerm,
@@ -71,11 +72,14 @@ import Covenant.MockPlutus (
     pLam,
     pSnd,
     pVar,
+    ppTerm,
+    prettyPTerm,
     unConstrData,
  )
 import Covenant.Test (Id (UnsafeMkId))
 import Covenant.Transform.Schema
 import Covenant.Transform.TyUtils (idToName)
+import Data.Bifunctor (Bifunctor (bimap, second))
 import Data.Foldable (
     foldl',
  )
@@ -173,28 +177,27 @@ resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
             Nothing -> case maybeR of
                 Just rIndex | indx == rIndex -> traceM "resolve r" >> pure . Just $ lamArgVars Vector.! 0
                 _ -> traceM "resolve no handler no r" >> pure Nothing
-            Just hIx -> traceM ("resolve result: " <> show hIx) >> pure $ lamArgVars Vector.!? hIx
+            Just hIx -> traceM ("resolve result: " <> show hIx) >> pure . pure $ lamArgVars Vector.! hIx
         bi@(BuiltinFlat _) -> do
             mRepHandler <- lookupPolyRepHandler bi
             case mRepHandler of
                 Nothing -> traceM "resolve no polyRepHandler" >> pure Nothing
                 Just polyRepHandler -> do
                     let handler = extractHandler polyRepHandler
-                        msg = "resolve found poly rep handler " <> show handler
+                        msg = "resolve found poly rep handler " <> ppTerm handler
                     traceM msg
                     pure . Just $ handler
         _anythingElse -> traceM "resolve nothing catchall" >> pure Nothing
   where
     msg =
-        "resolvePolyRep:\n  "
+        "\nresolvePolyRep:\n  "
             <> show handlerArgPosDict
-            <> "\n valTy: "
-            <> show valT
-            <> "\n argVars: "
-            <> show lamArgVars
-            <> "\n maybeR: "
+            <> "\n   valTy: "
+            <> pValT valT
+            <> "\n  argVars: "
+            <> pVec ppTerm lamArgVars
+            <> "\n  maybeR: "
             <> show maybeR
-            <> "\n"
 
     extractHandler :: PolyRepHandler -> PlutusTerm
     extractHandler (PolyRepHandler projF embedF) = case nodeKind of
@@ -384,8 +387,27 @@ genFiniteListEliminator branchHandler aList resolveProjection elTys =
     withHead :: ValT AbstractTy -> PlutusTerm -> AppTransformM PlutusTerm
     withHead ty headEl =
         resolveProjection ty >>= \case
-            Just projVar -> pure $ pApp projVar headEl
-            Nothing -> pure headEl
+            Just projVar -> do
+                let result = pApp projVar headEl
+                let msg =
+                        "\nresolveProjection SUCCESS\n  ty: "
+                            <> pValT ty
+                            <> "\n  term: "
+                            <> ppTerm headEl
+                            <> "\n  result: "
+                            <> ppTerm result
+                traceM msg
+                pure $ pApp projVar headEl
+            Nothing -> do
+                let msg =
+                        "\nresolveProjection FAIL\n  ty: "
+                            <> pValT ty
+                            <> "\n  term: "
+                            <> ppTerm headEl
+                            <> "\n  result: "
+                            <> ppTerm headEl
+                traceM msg
+                pure headEl
 
     finalizer :: [PlutusTerm] -> AppTransformM PlutusTerm
     finalizer = pure . foldl' pApp branchHandler
@@ -431,6 +453,13 @@ pCaseConstrData scrutinee typedHandlers lookupShim = do
                 ThunkT (CompN _ (ArgsAndResult args _)) -> Vector.toList args
                 _ -> []
         genFiniteListEliminator handler ctorArgs lookupShim hArgs
+    traceM $
+        "\npCaseConstrData: \n  scrut: "
+            <> ppTerm scrutinee
+            <> "\n  typedHandlers: "
+            <> show (bimap pValT ppTerm <$> typedHandlers)
+            <> "\n  resolvedHandlers: "
+            <> pVec ppTerm plcHandlers
     pure $ pCase ctorIx plcHandlers
   where
     constrDataPair = unConstrData scrutinee

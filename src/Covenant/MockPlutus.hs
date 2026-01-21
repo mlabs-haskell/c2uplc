@@ -41,6 +41,7 @@ module Covenant.MockPlutus (
     -- for debugging
     betterPrettyPlutus,
     prettyPTerm,
+    ppTerm,
 ) where
 
 import Covenant.Constant (AConstant (..))
@@ -101,6 +102,9 @@ betterPrettyPlutus pt = vcat . reverse $ go [] pt
              in go (here : acc) body
         other -> pretty other : acc
 
+ppTerm :: PlutusTerm -> String
+ppTerm = show . prettyPTerm
+
 prettyPTerm :: forall ann. PlutusTerm -> Doc ann
 prettyPTerm pt = case takeBindable ([], pt) of
     ([], rest) -> prettyNoBind rest
@@ -126,7 +130,7 @@ prettyPTerm pt = case takeBindable ([], pt) of
              in align . group . encloseSep "" "" " # " $ (fs <> [prettyAtomic arg])
         Force () inner -> "!" <> prettyAtomic inner
         Delay () inner -> angles $ prettyNoBind inner
-        c@(Constant a b) -> pretty b
+        c@(Constant a b) -> pretty c
         bi@(Builtin a b) -> pretty b
         Error{} -> "ERROR"
         Constr () cix args -> "constr" <+> pretty cix <+> list (prettyPTerm <$> args)
@@ -134,7 +138,7 @@ prettyPTerm pt = case takeBindable ([], pt) of
             group $
                 "case"
                     <+> prettyNoBind scrut
-                    <+> hardline
+                    <+> line
                     <> group
                         (indent 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
 

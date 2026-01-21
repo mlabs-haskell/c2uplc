@@ -47,7 +47,7 @@ mkConstructorFunctions tn =
     lookupDatatypeInfo tn >>= \dtInfo -> case view #originalDecl dtInfo of
         DataDeclaration _tn cnt ctors enc -> do
             Vector.ifoldM (go dtInfo cnt enc) Vector.empty ctors
-        OpaqueData{} -> error "TODO: intro forms for opaque"
+        OpaqueData tn ctors -> error "TODO: intro forms for opaque"
   where
     go ::
         DatatypeInfo AbstractTy ->
@@ -59,7 +59,7 @@ mkConstructorFunctions tn =
         AppTransformM (Vector TyFixerFnData)
     go _dtInfo cnt enc acc cIx (Constructor (ConstructorName cName) argTys) = do
         let ctorFnTy = mkCtorFnTy cnt argTys
-            schema = mkTypeSchema enc ctorFnTy
+            schema = mkTypeSchema True enc ctorFnTy
             funName = cName
         compiled <- genIntroFormPLC enc schema cIx
         let here =
@@ -98,18 +98,15 @@ mkConstructorFunctions tn =
                 DataSchema _ handlerArgPosDict -> do
                     {- We need to resolve embeddings for both type variables *and* statically known concrete builtin types.
                     -}
-                    traceM $ "nameTyPairs" <> show nameTyPairs
                     let resolveEmbedding :: ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)
                         resolveEmbedding = resolvePolyRepHandler IntroNode handlerArgPosDict lamArgVars Nothing
                     handledCtorArgs <- Vector.forM nameTyPairs $ \(cArgNm, cArgTy) ->
                         resolveEmbedding cArgTy >>= \case
                             Nothing -> do
                                 let res = pVar cArgNm
-                                traceM $ "resolve result " <> show res
                                 pure res
                             Just argHandler -> do
                                 let res = pApp argHandler (pVar cArgNm)
-                                traceM $ "resolve result " <> show res
                                 pure res
                     case dataEnc of
                         -- TODO: Fill in some of the helpers (plutus_I, listData, etc) and make sure you use the "right version" here
@@ -119,8 +116,6 @@ mkConstructorFunctions tn =
                             EnumData -> pure $ lamBuilder (plutus_I $ fromIntegral ctorIx)
                             ProductListData -> pure . lamBuilder $ listData handledCtorArgs
                             ConstrData ->
-                                -- LIVE AS OF 12/31
-                                -- NOTE/FIXME/TODO: This shouldn't be plutus_I, use ConstrData which takes an Integer not a data
                                 pure . lamBuilder $ plutus_ConstrData (fromIntegral ctorIx) handledCtorArgs
                             NewtypeData ->
                                 -- NOTE: Double check whether we need to do any embedding here. Koz thinks we don't and he's pretty
