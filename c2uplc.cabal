@@ -123,6 +123,7 @@ library
     Covenant.Transform.Pipeline.ResolveRepPoly
     Covenant.Transform.Schema
     Covenant.Transform.TyUtils
+    Covenant.Universe
 
   hs-source-dirs:  src
   build-depends:   plutus-core ==1.51.0.0

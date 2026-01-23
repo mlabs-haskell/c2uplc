@@ -110,7 +110,7 @@ prettyPTerm pt = case takeBindable ([], pt) of
     ([], rest) -> prettyNoBind rest
     (letBinds, rest) ->
         let pRest = "in" <+> prettyNoBind rest
-         in align . vcat . reverse $ (pRest : letBinds)
+         in align . vsep . reverse $ (pRest : letBinds)
   where
     takeBindable :: ([Doc ann], PlutusTerm) -> ([Doc ann], PlutusTerm)
     takeBindable (acc, t) = case t of
@@ -133,14 +133,16 @@ prettyPTerm pt = case takeBindable ([], pt) of
         c@(Constant a b) -> pretty c
         bi@(Builtin a b) -> pretty b
         Error{} -> "ERROR"
-        Constr () cix args -> "constr" <+> pretty cix <+> list (prettyPTerm <$> args)
+        Constr () cix args -> "constr" <+> pretty cix <+> align (group $ list (prettyPTerm <$> args))
         Case () scrut handlers ->
             group $
                 "case"
                     <+> prettyNoBind scrut
                     <+> line
-                    <> group
-                        (indent 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
+                    <> align
+                        ( group
+                            (indent 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
+                        )
 
     prettyAtomic :: PlutusTerm -> Doc ann
     prettyAtomic = \case

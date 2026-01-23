@@ -29,6 +29,7 @@ import Covenant.Index
 import Covenant.MockPlutus (prettyPTerm)
 import Covenant.Test (unsafeMkDatatypeInfos)
 import Data.Either (isRight)
+import Data.Wedge (Wedge (There))
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -46,6 +47,14 @@ data CompilerError
     = ASGConstructionFail CovenantError
     | CodeGenFail CodeGenError
     deriving stock (Show)
+
+testCompileIO ::
+    forall a.
+    Vector (DataDeclaration AbstractTy) ->
+    ASGBuilder a ->
+    IO PlutusTerm
+testCompileIO dtDict builder = case mkASG dtDict builder of
+    Left asgErr -> undefined
 
 testCompile ::
     forall a.
@@ -191,3 +200,14 @@ elimNewtype = testLam (BuiltinFlat IntegerT) $ do
     myNT <- AnId <$> ctor' "Newtype" "Newtype" [one]
     idF <- lazyLam (Comp1 $ BuiltinFlat IntegerT :--:> ReturnT (BuiltinFlat IntegerT)) $ AnArg <$> arg Z ix0
     AnId <$> match myNT [AnId idF]
+
+myListInts :: ASGBuilder Id
+myListInts = testLam (Datatype "MyList" [BuiltinFlat IntegerT]) $ do
+    (one, two, three) <- (,,) <$> lit (AnInteger 1) <*> lit (AnInteger 2) <*> lit (AnInteger 3)
+    AnId <$> mkListLike "MyList" "MyCons" "MyNil" [one, two, three]
+
+mkListLike :: TyName -> ConstructorName -> ConstructorName -> [Id] -> ASGBuilder Id
+mkListLike ty _ nil [] = ctor ty nil [] [There (BuiltinFlat IntegerT)]
+mkListLike ty cons nil (x : xs) = do
+    xs' <- AnId <$> mkListLike ty cons nil xs
+    ctor' ty cons [AnId x, xs']
