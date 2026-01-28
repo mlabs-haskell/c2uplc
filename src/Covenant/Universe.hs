@@ -11,8 +11,10 @@ import Data.Map (Map)
 import Data.Map qualified as M
 import PlutusCore.Default (DefaultUni (..), Esc)
 
+import Covenant.MockPlutus
 import Data.Vector qualified as V
 import Optics.Core (view)
+import PlutusCore.MkPlc (mkConstantOf)
 
 {- An existentially quantified GADT witness of default universe membership.
 
@@ -20,6 +22,9 @@ import Optics.Core (view)
 -}
 data UniProof :: Type where
     MkUniProof :: forall (a :: Type). DefaultUni (Esc a) -> UniProof
+
+data ListProof :: Type where
+    MkListProof :: forall (a :: Type). DefaultUni (Esc [a]) -> ListProof
 
 {- Takes a dictionary containing type information (to look up encodings) and a value type,
    and returns a proof that the equivalent Plutus type is a member of the default Plutus universe
@@ -37,4 +42,77 @@ data UniProof :: Type where
      - We can't construct a witness for anything else.
 -}
 decideUniType :: Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> Maybe UniProof
-decideUniType dtDict = undefined
+decideUniType dtDict = \case
+    BuiltinFlat bi -> case bi of
+        IntegerT -> Just $ MkUniProof DefaultUniInteger
+        ByteStringT -> Just $ MkUniProof DefaultUniByteString
+        StringT -> Just $ MkUniProof DefaultUniByteString
+        UnitT -> Just $ MkUniProof DefaultUniUnit
+        BoolT -> Just $ MkUniProof DefaultUniBool
+        BLS12_381_G1_ElementT -> Just $ MkUniProof DefaultUniBLS12_381_G1_Element
+        BLS12_381_G2_ElementT -> Just $ MkUniProof DefaultUniBLS12_381_G2_Element
+        BLS12_381_MlResultT -> Just $ MkUniProof DefaultUniBLS12_381_MlResult
+    Datatype tn (V.toList -> args)
+        | hasDataEncoding tn -> Just $ MkUniProof DefaultUniData
+        | otherwise -> case tn of
+            "List" -> case args of
+                [listElTy] -> do
+                    MkUniProof listElProof <- decideUniType dtDict listElTy
+                    pure . MkUniProof $ DefaultUniApply DefaultUniProtoList listElProof
+                _ -> Nothing
+            "Pair" -> case args of
+                [pairA, pairB] -> do
+                    MkUniProof proofA <- decideUniType dtDict pairA
+                    MkUniProof proofB <- decideUniType dtDict pairB
+                    pure . MkUniProof $ DefaultUniApply DefaultUniProtoPair proofA `DefaultUniApply` proofB
+                _ -> Nothing
+            "Data" -> pure . MkUniProof $ DefaultUniData
+            -- I am not sure if we even really need this, but just in case..
+            "Map" -> case args of
+                [k, v] -> do
+                    MkUniProof proofK <- decideUniType dtDict k
+                    MkUniProof proofV <- decideUniType dtDict v
+                    pure $
+                        MkUniProof $
+                            DefaultUniApply DefaultUniProtoList $
+                                DefaultUniApply DefaultUniProtoPair proofK `DefaultUniApply` proofV
+            _ -> Nothing
+  where
+    hasDataEncoding :: TyName -> Bool
+    hasDataEncoding tn = case view #originalDecl <$> M.lookup tn dtDict of
+        Nothing -> False
+        Just OpaqueData{} -> True
+        Just (DataDeclaration tn _cnt ctors enc) -> case enc of
+            PlutusData _ -> True
+            _ -> False
+
+{- This expect a List ValT and will return nothing if given anything else.
+
+   It constructs a witness for the original type and then peels off the List layers
+   to get a witness of the inner universe type and an Int representing the number of layers peeled off.
+
+   We need something like this to facilitiate list projections and embeddings.
+
+   TODO: Better errors than "String"
+
+-}
+analyzeListTy ::
+    Map TyName (DatatypeInfo AbstractTy) ->
+    ValT AbstractTy ->
+    Maybe (Integer, UniProof)
+analyzeListTy dtDict valT = case decideUniType dtDict valT of
+    Nothing -> Nothing
+    Just (MkUniProof hopefullyAList) -> go hopefullyAList
+  where
+    go :: forall (a :: Type). DefaultUni (Esc a) -> Maybe (Integer, UniProof)
+    go = \case
+        DefaultUniApply DefaultUniProtoList t -> case go t of
+            Nothing -> Just (0, MkUniProof t)
+            Just (acc, t') -> Just (1 + acc, t')
+        other -> Nothing
+
+-- Use this with the ARGUMENT TO `List` (not the whole List type)
+properlyTypedEmptyListForAnUntypedLanguage :: Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> Maybe PlutusTerm
+properlyTypedEmptyListForAnUntypedLanguage dtDict val = do
+    MkUniProof p <- decideUniType dtDict val
+    pure $ mkConstantOf () (DefaultUniApply DefaultUniProtoList p) []

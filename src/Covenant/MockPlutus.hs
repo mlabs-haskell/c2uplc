@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ViewPatterns #-}
 
 {- HLINT ignore "Use camelCase" -}
@@ -32,6 +33,12 @@ module Covenant.MockPlutus (
     unConstrData,
     pFst,
     pSnd,
+    (#),
+    (#<=),
+    (#-),
+    pIf,
+    pCons,
+    pNilData,
     -- temporary
     mkBuiltinCase,
     oneArgFuncs,
@@ -49,6 +56,7 @@ import Covenant.Prim
 import Covenant.Prim (OneArgFunc, SixArgFunc, ThreeArgFunc, TwoArgFunc)
 import Covenant.Test (Id (UnsafeMkId))
 import Data.Foldable (foldl')
+import Data.Text (Text)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Data.Word (Word64)
@@ -119,12 +127,18 @@ prettyPTerm pt = case takeBindable ([], pt) of
              in takeBindable (here : acc, body)
         other -> (acc, other)
 
+    takeLamArgs :: ([Text], PlutusTerm) -> ([Text], PlutusTerm)
+    takeLamArgs (varAcc, next) = case next of
+        LamAbs () (Name txt _) body -> takeLamArgs (txt : varAcc, body)
+        _ -> (reverse varAcc, next)
+
     prettyNoBind :: PlutusTerm -> Doc ann
     prettyNoBind = \case
         Var () (Name txt _) -> pretty txt
-        LamAbs () (Name txt _) body ->
-            align . group $
-                "\\" <> pretty txt <+> "->" <> line <> nest 2 (prettyPTerm body)
+        LamAbs () (Name txt _) _body ->
+            let (vars, body) = takeLamArgs ([txt], _body)
+             in align . group $
+                    "\\" <> hsep (pretty <$> vars) <+> "->" <> line <> nest 2 (prettyPTerm body)
         Apply () f arg ->
             let fs = prettyAtomic <$> analyzeApp f
              in align . group . encloseSep "" "" " # " $ (fs <> [prettyAtomic arg])
@@ -138,10 +152,10 @@ prettyPTerm pt = case takeBindable ([], pt) of
             group $
                 "case"
                     <+> prettyNoBind scrut
-                    <+> line
+                    <+> hardline
                     <> align
                         ( group
-                            (indent 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
+                            (nest 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
                         )
 
     prettyAtomic :: PlutusTerm -> Doc ann
@@ -174,7 +188,7 @@ plutus_I i = pBuiltin IData # mkConstant () i
 
 -- Makes a Constr PlutusData
 plutus_ConstrData :: Integer -> Vector PlutusTerm -> PlutusTerm
-plutus_ConstrData cix ctorArgs = constrData (mkConstant () cix) (pBuiltinList ctorArgs)
+plutus_ConstrData cix ctorArgs = constrData (mkConstant () cix) (pBuiltinList pNilData ctorArgs)
 
 -- these _Data functions probably correspond to builtins, I'll look up their names later
 -- NOTE: I guess we could do these in the ASG by applying a builtin function.
@@ -213,16 +227,30 @@ pSnd aPair = pBuiltin SndPair # aPair
 pCons :: PlutusTerm -> PlutusTerm -> PlutusTerm
 pCons x xs = pBuiltin MkCons # x # xs
 
-pNil :: PlutusTerm
-pNil = Constant () $ someValue @[Data] []
+pNilData :: PlutusTerm
+pNilData = Constant () $ someValue @[Data] []
+
+-- | Uses `case` and not `IfThenElse`
+pIf :: PlutusTerm -> PlutusTerm -> PlutusTerm -> PlutusTerm
+pIf cond t f = pCase cond [f, t]
+
+(#-) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+x #- y =
+    let minus = Builtin () PB.SubtractInteger
+     in minus # x # y
+
+(#<=) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+x #<= y =
+    let lte = Builtin () PB.LessThanEqualsInteger
+     in lte # x # y
 
 -- This makes a builtin list, not data-wrapped
-pBuiltinList :: Vector PlutusTerm -> PlutusTerm
-pBuiltinList = Vector.foldr pCons pNil
+pBuiltinList :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+pBuiltinList nil = Vector.foldr pCons nil
 
 -- This makes the PLUTUS DATA LIST (not a builtin list)
 listData :: Vector PlutusTerm -> PlutusTerm
-listData els = pBuiltin ListData # pBuiltinList els
+listData els = pBuiltin ListData # pBuiltinList pNilData els
 
 -- List xs -> xs
 unListData :: PlutusTerm -> PlutusTerm
@@ -235,7 +263,7 @@ pTail :: PlutusTerm -> PlutusTerm
 pTail t = pBuiltin TailList # t
 
 mapData :: Vector PlutusTerm -> PlutusTerm
-mapData t = pBuiltin MapData # pBuiltinList t
+mapData t = pBuiltin MapData # pBuiltinList pNilData t
 
 class IsBuiltin t where
     mkBuiltin :: t -> SomeBuiltin
@@ -362,6 +390,7 @@ mkBuiltinCase indent var ctors = "case " <> var <> " of" <> cases
     go :: String -> a -> String
     go acc (show -> ctor) = acc <> "\n" <> replicate indent ' ' <> ctor <> " -> " <> "Builtin () PB." <> ctor
 
+oneArgFuncs :: [OneArgFunc]
 oneArgFuncs =
     [ LengthOfByteString
     , Sha2_256
@@ -398,6 +427,7 @@ oneArgFuncs =
     , Ripemd_160
     ]
 
+twoArgFuncs :: [TwoArgFunc]
 twoArgFuncs =
     [ AddInteger
     , SubtractInteger
@@ -441,6 +471,7 @@ twoArgFuncs =
     , RotateByteString
     ]
 
+threeArgFuncs :: [ThreeArgFunc]
 threeArgFuncs =
     [ VerifyEd25519Signature
     , VerifyEcdsaSecp256k1Signature
@@ -455,4 +486,5 @@ threeArgFuncs =
     , ExpModInteger
     ]
 
+sixArgFuncs :: [SixArgFunc]
 sixArgFuncs = [ChooseData]

@@ -1,4 +1,5 @@
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Covenant.ExtendedASG (
     ExtendedId (WrappedSrc, IdentityFn, EphemeralError, Projection, Embedding, TyFixerFn),
@@ -20,10 +21,12 @@ module Covenant.ExtendedASG (
     resolveExtended,
     unExtendedASG,
     removeEphemeralError,
+    -- test util (mainly for debugging generated PLC w/o having to run the whole compiler)
+    runWithEmptyASG,
 ) where
 
 import Control.Monad.RWS.Strict (MonadState (..), modify')
-import Control.Monad.State.Strict (State, StateT)
+import Control.Monad.State.Strict (State, StateT, evalState)
 import Covenant.ASG (ASG (ASG), ASGNode, Id, topLevelId)
 import Covenant.Test (Id (UnsafeMkId))
 import Data.Bifunctor (first)
@@ -157,6 +160,10 @@ class (Monad m) => MonadASG m where
 instance MonadASG (State ExtendedASG) where
     getASG = get
     putASG = put
+
+-- test util
+runWithEmptyASG :: forall r. (forall m. (MonadASG m) => m r) -> r
+runWithEmptyASG f = evalState f (ExtendedASG M.empty M.empty (UnsafeMkId 0))
 
 nextId :: forall (m :: Type -> Type). (MonadASG m) => m Id
 nextId = do

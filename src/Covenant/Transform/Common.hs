@@ -20,9 +20,15 @@ module Covenant.Transform.Common (
     genLambdaArgNames,
     countToTyVars,
     pFreshLam,
+    pFreshLam',
     pFreshLam2,
-    pLet,
+    pFreshLam2',
+    pFreshLam3,
+    pFreshLam3',
+    pLetM,
+    pLetM',
     pFix,
+    pFix',
     pCaseList,
     unsafeUnThunk,
     pCaseListWith,
@@ -75,6 +81,7 @@ import Covenant.MockPlutus (
     ppTerm,
     prettyPTerm,
     unConstrData,
+    (#),
  )
 import Covenant.Test (Id (UnsafeMkId))
 import Covenant.Transform.Schema
@@ -272,7 +279,7 @@ freshName = do
         asName = Name textPart (Unique $ fromIntegral w)
     pure asName
 
-freshNamePrefix :: Text -> AppTransformM Name
+freshNamePrefix :: (MonadASG m) => Text -> m Name
 freshNamePrefix nameBase = do
     UnsafeMkId w <- nextId
     let textPart = nameBase <> "_" <> T.pack (show w)
@@ -307,6 +314,12 @@ pFreshLam f = do
     let argVar = pVar varName
     pLam varName <$> f argVar
 
+pFreshLam' :: (MonadASG m) => Text -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam' nm f = do
+    varName <- freshNamePrefix nm
+    let argVar = pVar varName
+    pLam varName <$> f argVar
+
 pFreshLam2 :: (MonadASG m) => (PlutusTerm -> PlutusTerm -> m PlutusTerm) -> m PlutusTerm
 pFreshLam2 f = do
     varName1 <- freshName
@@ -316,20 +329,78 @@ pFreshLam2 f = do
     body <- f argVar1 argVar2
     pure $ pLam varName1 (pLam varName2 body)
 
+pFreshLam2' ::
+    (MonadASG m) =>
+    Text ->
+    Text ->
+    (PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
+    m PlutusTerm
+pFreshLam2' vn1 vn2 f = do
+    varName1 <- freshNamePrefix vn1
+    varName2 <- freshNamePrefix vn2
+    let argVar1 = pVar varName1
+        argVar2 = pVar varName2
+    body <- f argVar1 argVar2
+    pure $ pLam varName1 (pLam varName2 body)
+
+pFreshLam3 :: (MonadASG m) => (PlutusTerm -> PlutusTerm -> PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam3 f = do
+    v1 <- freshName
+    v2 <- freshName
+    v3 <- freshName
+    let arg1 = pVar v1
+        arg2 = pVar v2
+        arg3 = pVar v3
+    body <- f arg1 arg2 arg3
+    pure $ pLam v1 (pLam v2 (pLam v3 body))
+
+pFreshLam3' ::
+    (MonadASG m) =>
+    Text ->
+    Text ->
+    Text ->
+    (PlutusTerm -> PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
+    m PlutusTerm
+pFreshLam3' vn1 vn2 vn3 f = do
+    v1 <- freshNamePrefix vn1
+    v2 <- freshNamePrefix vn2
+    v3 <- freshNamePrefix vn3
+    let arg1 = pVar v1
+        arg2 = pVar v2
+        arg3 = pVar v3
+    body <- f arg1 arg2 arg3
+    pure $ pLam v1 (pLam v2 (pLam v3 body))
+
 -- This will be useful eventually
-pLet :: PlutusTerm -> (PlutusTerm -> AppTransformM PlutusTerm) -> AppTransformM PlutusTerm
-pLet toBind withBind = do
+pLetM :: (MonadASG m) => PlutusTerm -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pLetM toBind withBind = do
     f <- pFreshLam withBind
     pure $ f `pApp` toBind
 
+pLetM' :: (MonadASG m) => Text -> PlutusTerm -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pLetM' nm toBind withBind = do
+    f <- pFreshLam' nm withBind
+    pure $ f `pApp` toBind
+
 -- REVIEW: I can't remember whether Koz said to use a hoisted or non-hoisted fix -_-
-pFix :: --
+pFix ::
+    forall (m :: Type -> Type).
+    (MonadASG m) =>
     PlutusTerm ->
-    AppTransformM PlutusTerm
+    m PlutusTerm
 pFix f = do
-    g <- pFreshLam (\r -> pure $ r `pApp` r)
-    h <- pFreshLam (\r -> pure $ f `pApp` (r `pApp` r))
-    pure $ g `pApp` h
+    g <- pFreshLam' "fix_x" $ \r -> pure (r # r)
+    h <- pFreshLam' "fix_y" (\r -> pure $ f # (r # r))
+    pure $ g # h
+
+pFix' ::
+    forall (m :: Type -> Type).
+    (MonadASG m) =>
+    m PlutusTerm
+pFix' = pFreshLam' "fix_f" $ \f -> do
+    g <- pFreshLam' "fix_x" $ \r -> pure (r # r)
+    h <- pFreshLam' "fix_y" (\r -> pure $ f # (r # r))
+    pure $ g # h
 
 -- This is for casing on a list that is known to NOT BE EMPTY
 pCaseList ::
