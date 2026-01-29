@@ -31,11 +31,14 @@ module Covenant.MockPlutus (
     pHead,
     pTail,
     unConstrData,
+    caseConstrEnum,
     pFst,
     pSnd,
     (#),
     (#<=),
     (#-),
+    (#+),
+    (#==),
     pIf,
     pCons,
     pNilData,
@@ -216,6 +219,12 @@ constrData cix ctorArgs = pBuiltin ConstrData # cix # ctorArgs
 unConstrData :: PlutusTerm -> PlutusTerm
 unConstrData t = pBuiltin UnConstrData # t
 
+-- does not apply anything to the handlers
+caseConstrEnum :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+caseConstrEnum scrut handlers = pCase ctorIx handlers
+  where
+    ctorIx = pFst (unConstrData scrut)
+
 -- convenience for pApp FstPair
 pFst :: PlutusTerm -> PlutusTerm
 pFst aPair = pBuiltin FstPair # aPair
@@ -243,6 +252,12 @@ x #- y =
 x #<= y =
     let lte = Builtin () PB.LessThanEqualsInteger
      in lte # x # y
+
+(#==) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+x #== y = pBuiltin EqualsInteger # x # y
+
+(#+) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+x #+ y = pBuiltin AddInteger # x # y
 
 -- This makes a builtin list, not data-wrapped
 pBuiltinList :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm

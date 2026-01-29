@@ -404,9 +404,11 @@ pFix' = pFreshLam' "fix_f" $ \f -> do
 
 -- This is for casing on a list that is known to NOT BE EMPTY
 pCaseList ::
+    forall (m :: Type -> Type).
+    (MonadASG m) =>
     PlutusTerm ->
-    (PlutusTerm -> PlutusTerm -> AppTransformM PlutusTerm) ->
-    AppTransformM PlutusTerm
+    (PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
+    m PlutusTerm
 pCaseList xs f = pCase xs . Vector.singleton <$> pFreshLam2 f
 
 -- Used to resolve some annoying inconsistencies we don't have time to fix now
@@ -423,16 +425,17 @@ unsafeUnThunk = \case
 
 -}
 pCaseListWith ::
-    forall (a :: Type).
+    forall (a :: Type) (m :: Type -> Type).
+    (MonadASG m) =>
     [a] -> -- Usually a list of types representing the known structure of the list
-    (a -> PlutusTerm -> AppTransformM PlutusTerm) -> -- what do we do with the head of the list?
-    ([PlutusTerm] -> AppTransformM PlutusTerm) -> -- what do we do with all of the list elements at the end?
+    (a -> PlutusTerm -> m PlutusTerm) -> -- what do we do with the head of the list?
+    ([PlutusTerm] -> m PlutusTerm) -> -- what do we do with all of the list elements at the end?
     PlutusTerm -> -- a list-typed plutus term
-    AppTransformM PlutusTerm
+    m PlutusTerm
 pCaseListWith [] _ withElems _ = withElems [] -- only thing we can do
 pCaseListWith (x : xs) withHead withElems aList = go [] aList x xs
   where
-    go :: [PlutusTerm] -> PlutusTerm -> a -> [a] -> AppTransformM PlutusTerm
+    go :: [PlutusTerm] -> PlutusTerm -> a -> [a] -> m PlutusTerm
     go termAcc remList t [] = pCaseList remList $ \y _ys -> do
         yTerm <- withHead t y
         let args = termAcc <> [yTerm]
@@ -443,19 +446,21 @@ pCaseListWith (x : xs) withHead withElems aList = go [] aList x xs
         go termAcc' ys tx ts
 
 genFiniteListEliminator ::
+    forall m.
+    (MonadASG m) =>
     -- a Plutus term representing the branch/arm handler
     PlutusTerm ->
     -- The list (usually a scrutinee for Enums or the Plutus list of ctor args for a Constr encoded thing)
     PlutusTerm ->
     -- Looks up the projection/embedding/"self" function.
-    (ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)) ->
+    (ValT AbstractTy -> m (Maybe PlutusTerm)) ->
     -- The statically known types of all of the list elements
     [ValT AbstractTy] ->
-    AppTransformM PlutusTerm
+    m PlutusTerm
 genFiniteListEliminator branchHandler aList resolveProjection elTys =
     pCaseListWith elTys withHead finalizer aList
   where
-    withHead :: ValT AbstractTy -> PlutusTerm -> AppTransformM PlutusTerm
+    withHead :: ValT AbstractTy -> PlutusTerm -> m PlutusTerm
     withHead ty headEl =
         resolveProjection ty >>= \case
             Just projVar -> do
@@ -480,7 +485,7 @@ genFiniteListEliminator branchHandler aList resolveProjection elTys =
                 traceM msg
                 pure headEl
 
-    finalizer :: [PlutusTerm] -> AppTransformM PlutusTerm
+    finalizer :: [PlutusTerm] -> m PlutusTerm
     finalizer = pure . foldl' pApp branchHandler
 
 {- This is a convenience helper for generating case expressions over constructor encoded datatypes which
@@ -509,6 +514,8 @@ genFiniteListEliminator branchHandler aList resolveProjection elTys =
 
 -}
 pCaseConstrData ::
+    forall m.
+    (MonadASG m) =>
     -- The scrutinee to case on. Needs to be ConstrData encoded PlutusData
     PlutusTerm ->
     -- A vector of types for each branch handler (in BB fn signature order)
@@ -516,8 +523,8 @@ pCaseConstrData ::
     Vector (ValT AbstractTy, PlutusTerm) ->
     -- A function which selects unwrappers (or self recursive calls)
     -- for a given type variable.
-    (ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)) ->
-    AppTransformM PlutusTerm
+    (ValT AbstractTy -> m (Maybe PlutusTerm)) ->
+    m PlutusTerm
 pCaseConstrData scrutinee typedHandlers lookupShim = do
     plcHandlers <- Vector.forM typedHandlers $ \(hTy, handler) -> do
         let hArgs = case hTy of
