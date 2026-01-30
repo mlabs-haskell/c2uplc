@@ -41,7 +41,7 @@ import Control.Monad.State.Strict (MonadState (get, put), MonadTrans (lift), Sta
 import Covenant.ArgDict
 import Covenant.Data (DatatypeInfo)
 import Covenant.MockPlutus
-import Covenant.Prim (OneArgFunc (IData, ListData, UnIData, UnListData, BData, UnBData))
+import Covenant.Prim (OneArgFunc (BData, IData, ListData, UnBData, UnIData, UnListData))
 import Covenant.Universe
 import Data.Foldable (foldrM, traverse_)
 import Data.Maybe (isJust, isNothing)
@@ -54,7 +54,6 @@ import PlutusCore.Data (Data (Constr, I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
-
 
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.
@@ -79,7 +78,6 @@ import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
          "top level scope" or dependencies of such things.
 -}
 
-
 defStubs :: forall m. (MonadASG m) => StubM m ()
 defStubs = do
     _fix
@@ -102,7 +100,7 @@ defStubs = do
     _or
     _cataNat
     _cataNeg
-    _cataByteString 
+    _cataByteString
 
 {- ***************************
    Hard-coded Catamorphisms
@@ -110,19 +108,21 @@ defStubs = do
 -}
 
 {- r -> (r -> r) -> Integer -> r -}
-_cataNat :: forall m. MonadASG m => StubM m ()
+_cataNat :: forall m. (MonadASG m) => StubM m ()
 _cataNat = declare "cataNat" body
   where
     body :: StubM m PlutusTerm
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
         recNat <- resolveStub "recNat"
         let nIsNegative = n #< i 0
-        pure $ pIf nIsNegative
-                   pError
-                   (recNat # whenZ # whenS # n)
+        pure $
+            pIf
+                nIsNegative
+                pError
+                (recNat # whenZ # whenS # n)
 
 {- r -> (r -> r) -> Integer -> r -}
-_cataNeg :: forall m. MonadASG m => StubM m ()
+_cataNeg :: forall m. (MonadASG m) => StubM m ()
 _cataNeg = declare "cataNeg" body
   where
     body :: StubM m PlutusTerm
@@ -130,35 +130,40 @@ _cataNeg = declare "cataNeg" body
         pNot <- resolveStub "not"
         recNeg <- resolveStub "recNeg"
         let nIsPositive = pNot # (n #<= i 0)
-        pure $ pIf nIsPositive
-                   pError
-                   (recNeg # whenZ # whenS # n)
+        pure $
+            pIf
+                nIsPositive
+                pError
+                (recNeg # whenZ # whenS # n)
 
 -- TODO need to test this
-_cataByteString :: forall m. MonadASG m => StubM m ()
+_cataByteString :: forall m. (MonadASG m) => StubM m ()
 _cataByteString = declare "cataByteString" $ do
-  fix <- resolveStub "fix"
-  body <- go
-  pure $ fix # body 
+    fix <- resolveStub "fix"
+    body <- go
+    pure $ fix # body
   where
     go :: StubM m PlutusTerm
     go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
-      pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
-        pure $ pIf (ix #== len)
-                   whenEmpty
-                   (whenNonEmpty
-                     # (originalBS #! ix)
-                     # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #- i 1)))
+        pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
+            pure $
+                pIf
+                    (ix #== len)
+                    whenEmpty
+                    ( whenNonEmpty
+                        # (originalBS #! ix)
+                        # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #- i 1))
+                    )
 
 --
-_cataList :: forall m. MonadASG m => StubM m ()
+_cataList :: forall m. (MonadASG m) => StubM m ()
 _cataList = declare "cataList" $ do
-  fix <- resolveStub "fix"
-  body <- go
-  pure $ fix # body
- where
-   go :: StubM m PlutusTerm
-   go = _
+    fix <- resolveStub "fix"
+    body <- go
+    pure $ fix # body
+  where
+    go :: StubM m PlutusTerm
+    go = _
 
 {- *************************
    Stub Monad
@@ -172,7 +177,7 @@ _cataList = declare "cataList" $ do
 
 data StubContext
     = StubContext
-    { bindings :: Map Text (Name, PlutusTerm, Id) -- not everything actually needs an Id 
+    { bindings :: Map Text (Name, PlutusTerm, Id) -- not everything actually needs an Id
     , deps :: Map Text (Set Text) -- an adjacency list, basically
     , depsAcc :: Set Text
     }
@@ -227,14 +232,15 @@ compileStubM act =
                 Left ohNoACycle -> pure (Left $ DepCycle ohNoACycle)
                 Right (reverse -> depsInOrder) -> pure $ foldr (letBindEm binds) (Right inner) depsInOrder
   where
-    letBindEm :: forall a.
+    letBindEm ::
+        forall a.
         Map Text (Name, PlutusTerm, a) ->
         Text ->
         Either StubError PlutusTerm ->
         Either StubError PlutusTerm
     letBindEm dict txtNm acc = case M.lookup txtNm dict of
         Nothing -> Left $ NoBinding txtNm
-        Just (pNm, body,_) -> pLet pNm body <$> acc
+        Just (pNm, body, _) -> pLet pNm body <$> acc
 
 -- for testing
 compileStub' :: (forall m. (MonadASG m) => StubM m PlutusTerm) -> Either StubError PlutusTerm
@@ -247,18 +253,18 @@ resolveStub :: (Monad m) => Text -> StubM m PlutusTerm
 resolveStub txt = do
     StubContext bs _ _ <- get
     case M.lookup txt bs of
-        Just (res, _,_) -> do
+        Just (res, _, _) -> do
             modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert txt acc)
             pure (pVar res)
         Nothing -> throwError $ NoBinding txt
 
-resolveStub' :: Monad m => Text -> StubM m (Name,PlutusTerm,Id)
+resolveStub' :: (Monad m) => Text -> StubM m (Name, PlutusTerm, Id)
 resolveStub' nm = do
     StubContext bs _ _ <- get
     case M.lookup nm bs of
         Just res -> do
             modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert nm acc)
-            pure res 
+            pure res
         Nothing -> throwError $ NoBinding nm
 
 stubExists :: (Monad m) => Text -> StubM m Bool
@@ -272,19 +278,19 @@ declare :: forall m. (MonadASG m) => Text -> StubM m PlutusTerm -> StubM m ()
 declare nm mkStub =
     stubExists nm >>= \case
         True -> pure ()
-            -- I dont think this actually needs to be an error?
-            -- initAcc
+        -- I dont think this actually needs to be an error?
+        -- initAcc
         False -> withNoDeps $ do
-          stub <- mkStub
-          bindStub stub
+            stub <- mkStub
+            bindStub stub
   where
     withNoDeps :: StubM m a -> StubM m a
     withNoDeps act = do
-      StubContext _ _ acc <- get
-      modify' $ \(StubContext a b _) -> StubContext a b mempty
-      res <- act
-      modify' $ \(StubContext a b _) -> StubContext a b acc
-      pure res
+        StubContext _ _ acc <- get
+        modify' $ \(StubContext a b _) -> StubContext a b mempty
+        res <- act
+        modify' $ \(StubContext a b _) -> StubContext a b acc
+        pure res
 
     bindStub :: PlutusTerm -> StubM m ()
     bindStub stub = do
@@ -303,15 +309,17 @@ declare nm mkStub =
                 throwError $ MissingDeps nm (S.fromList notInScope)
 
 data HandlerType = Projection | Embedding
-  deriving stock (Show, Eq, Ord)
+    deriving stock (Show, Eq, Ord)
 
 -- Utility function for retrieving embeddings / projections. Will declare list projections if they do not exist
-selectHandler :: forall m. MonadASG m
-              => HandlerType
-              -> ValT AbstractTy
-              -> StubM m (Name,PlutusTerm,Id)
+selectHandler ::
+    forall m.
+    (MonadASG m) =>
+    HandlerType ->
+    ValT AbstractTy ->
+    StubM m (Name, PlutusTerm, Id)
 selectHandler htype valT = case valT of
-  BuiltinFlat IntegerT -> resolveStub' "projInt"
+    BuiltinFlat IntegerT -> resolveStub' "projInt"
 
 {-
    ***************************
@@ -388,10 +396,10 @@ projList ::
     DefaultUni (Esc a) -> StubM m PlutusTerm
 projList wit = body
   where
-    body = pFreshLam2' "projEl" "depth"  $ \projEl  depth  -> do
+    body = pFreshLam2' "projEl" "depth" $ \projEl depth -> do
         mkNil <- resolveStub (selectNilName wit)
         go <- mkGo mkNil
-        pure $ go # depth # projEl 
+        pure $ go # depth # projEl
 
     declNm = projListKey wit
 
@@ -400,11 +408,11 @@ projList wit = body
 
     -- Integer -> (Data -> a) -> Data -> [a]
     mkGo :: PlutusTerm -> StubM m PlutusTerm
-    mkGo nil = pFreshLam2' "depth" "projEl"  $ \depth projEl -> do
+    mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
         recNat <- resolveStub "recNatN"
         mapF <- resolveStub "map"
         goS <- pFreshLam3' "n" "f" "ys" $ \n f ys -> do
-            pure $  (mapF # (nil # n)) # f # unList ys
+            pure $ (mapF # (nil # n)) # f # unList ys
         goZ <- do
             let map0 = mapF # (nil # mkConstant @Integer () 0)
             pFreshLam' "goZ_xs" $ \xs -> pure $ map0 # projEl # unList xs
@@ -424,8 +432,8 @@ projListWithType dtDict valT projEl = case analyzeListTy dtDict valT of
         let projFName = projListKey wit
         mkSelectNil wit
         declare projFName $ do
-          projF <- projList wit
-          pure $ projF # projEl # mkConstant () depth 
+            projF <- projList wit
+            pure $ projF # projEl # mkConstant () depth
 
 projListKey :: forall (a :: Type). DefaultUni (Esc a) -> Text
 projListKey w = "projList[" <> T.pack (show w) <> "]"
@@ -465,19 +473,18 @@ _embedBool = declare "embedBool" $ pFreshLam' "b" $ \b ->
 _projInt :: (MonadASG m) => StubM m ()
 _projInt = declare "projInt" $ pure (pBuiltin UnIData)
 
-_embedInt :: MonadASG m => StubM m ()
+_embedInt :: (MonadASG m) => StubM m ()
 _embedInt = declare "embedInt" $ pure (pBuiltin IData)
-
 
 {- *********************************
    Bytestring Projection / Embedding
    *********************************
 -}
 
-_projByteString :: MonadASG m => StubM m ()
+_projByteString :: (MonadASG m) => StubM m ()
 _projByteString = declare "projByteString" $ pure (pBuiltin UnBData)
 
-_embedByteString :: MonadASG m => StubM m ()
+_embedByteString :: (MonadASG m) => StubM m ()
 _embedByteString = declare "embedByteString" $ pure (pBuiltin BData)
 
 {- *********************************
@@ -485,7 +492,7 @@ _embedByteString = declare "embedByteString" $ pure (pBuiltin BData)
    *********************************
 -}
 
-_id :: MonadASG m => StubM m ()
+_id :: (MonadASG m) => StubM m ()
 _id = declare "id" $ pFreshLam $ \x -> pure x
 
 -- We aren't putting the unique error here because it needs to be removed anyway and nothing
@@ -596,11 +603,11 @@ _pmap ::
     (MonadASG m) =>
     -- type-specific nil
     StubM m ()
-_pmap = declare "map" $ pFreshLam2' "map_nil" "map_f" $ \nil f  -> do
+_pmap = declare "map" $ pFreshLam2' "map_nil" "map_f" $ \nil f -> do
     goCons <- pFreshLam3' "self" "v" "vs" $ \self x xs -> pure $ pCons (f # x) (self # xs)
     goNil <- pFreshLam' "_" $ \_ -> pure nil
     recList <- resolveStub "recList"
-    pure $ recList # goCons # goNil 
+    pure $ recList # goCons # goNil
 
 {-
   This is a bit weird. This constructs an empty list value of the correct "depth"
@@ -656,8 +663,6 @@ mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
 selectNilName :: forall (a :: Type). DefaultUni (Esc a) -> Text
 selectNilName w = "selectNil[" <> T.pack (show w) <> "]"
 
-
-
 {-
     *************
     Logic
@@ -665,19 +670,17 @@ selectNilName w = "selectNil[" <> T.pack (show w) <> "]"
   NOTE: Uses case on bools for efficiency.
 -}
 
-_not :: forall m. MonadASG m =>  StubM m ()
+_not :: forall m. (MonadASG m) => StubM m ()
 _not = declare "not" $ pFreshLam $ \b ->
-  pure $ pIf b (mkConstant () False) (mkConstant () True)
+    pure $ pIf b (mkConstant () False) (mkConstant () True)
 
 _and :: forall m. (MonadASG m) => StubM m ()
 _and = declare "and" $ pFreshLam2 $ \b1 b2 ->
-  pure $ pIf b1 b2 (mkConstant () False)
+    pure $ pIf b1 b2 (mkConstant () False)
 
 _or :: forall m. (MonadASG m) => StubM m ()
 _or = declare "or" $ pFreshLam2 $ \b1 b2 ->
-  pure $ pIf b1 (mkConstant () True) b2
-
-
+    pure $ pIf b1 (mkConstant () True) b2
 
 {-
     *************
@@ -687,4 +690,3 @@ _or = declare "or" $ pFreshLam2 $ \b1 b2 ->
 
 i :: Integer -> PlutusTerm
 i = mkConstant ()
-

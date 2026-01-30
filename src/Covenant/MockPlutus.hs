@@ -256,7 +256,7 @@ x #<= y =
      in lte # x # y
 
 (#<) :: PlutusTerm -> PlutusTerm -> PlutusTerm
-x #< y = pBuiltin LessThanInteger # x # y 
+x #< y = pBuiltin LessThanInteger # x # y
 
 (#==) :: PlutusTerm -> PlutusTerm -> PlutusTerm
 x #== y = pBuiltin EqualsInteger # x # y
@@ -265,7 +265,7 @@ x #== y = pBuiltin EqualsInteger # x # y
 x #+ y = pBuiltin AddInteger # x # y
 
 (#!) :: PlutusTerm -> PlutusTerm -> PlutusTerm
-bs #! ix = pBuiltin IndexByteString # bs # ix 
+bs #! ix = pBuiltin IndexByteString # bs # ix
 
 -- This makes a builtin list, not data-wrapped
 pBuiltinList :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm

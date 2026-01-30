@@ -9,7 +9,7 @@ import Data.Map (Map)
 import Data.Set (Set)
 import Data.Vector (Vector)
 
-import Control.Monad.RWS.Strict (RWS, put, MonadReader, runRWS, ask)
+import Control.Monad.RWS.Strict (MonadReader, RWS, ask, put, runRWS)
 
 import Covenant.ASG (
     ASGNode (ACompNode),
@@ -21,7 +21,7 @@ import Covenant.Type (
     BuiltinFlatT,
     CompT,
     TyName (..),
-    ValT (BuiltinFlat, Abstraction),
+    ValT (Abstraction, BuiltinFlat),
  )
 
 import Control.Monad.State.Strict (MonadState (get), State, gets, modify', runState)
@@ -31,18 +31,18 @@ import Covenant.Test (CompNodeInfo (LamInternal))
 import Data.Kind (Type)
 import Data.Void (Void)
 
+import Covenant.ArgDict (pValT, pVec)
 import Covenant.ExtendedASG
-import Covenant.MockPlutus (PlutusTerm, ppTerm, pVar)
+import Covenant.MockPlutus (PlutusTerm, pVar, ppTerm)
 import Covenant.Transform.Common
 import Covenant.Transform.TyUtils (AppId, LambdaId (LambdaId), idToName)
+import Data.Map qualified as M
 import Data.Row.Records (HasType, Rec, Row, type (.+), type (.==))
 import Data.Row.Records qualified as R
-import GHC.TypeLits (KnownSymbol, Symbol)
+import Data.Text qualified as T
+import Data.Vector qualified as Vector
 import Debug.Trace (traceM)
-import qualified Data.Map as M
-import qualified Data.Vector as Vector
-import Covenant.ArgDict (pValT, pVec)
-import qualified Data.Text as T
+import GHC.TypeLits (KnownSymbol, Symbol)
 
 type PipelineData =
     TransformState

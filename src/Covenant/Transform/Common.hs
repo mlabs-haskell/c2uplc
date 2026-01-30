@@ -95,7 +95,6 @@ import PlutusCore.Name.Unique (
     Unique (Unique),
  )
 
-
 prettyMap' :: (Show k, Show v) => Map k v -> String
 prettyMap' = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"
 
@@ -169,11 +168,12 @@ freshNamePrefix nameBase = do
     let textPart = nameBase <> "_" <> T.pack (show w)
     pure $ Name textPart (Unique $ fromIntegral w)
 
-genLambdaArgNames :: forall (m :: Type -> Type) (a :: Type)
-                   . MonadASG m
-                  => Text
-                  -> Vector a
-                  -> m (Vector Name)
+genLambdaArgNames ::
+    forall (m :: Type -> Type) (a :: Type).
+    (MonadASG m) =>
+    Text ->
+    Vector a ->
+    m (Vector Name)
 genLambdaArgNames nameBase = Vector.imapM genTermVarName
   where
     genTermVarName :: Int -> a -> m Name

@@ -3,23 +3,23 @@
 
 module Covenant.Transform.Pipeline.MkTyFixerFnData where
 
-import Data.Map (Map)
-import Data.Map qualified as M
 import Covenant.Type (
     AbstractTy,
-    BuiltinFlatT, TyName,
+    BuiltinFlatT,
+    TyName,
  )
+import Data.Map (Map)
+import Data.Map qualified as M
 
 import Covenant.Data (DatatypeInfo)
-
 
 import Control.Monad (foldM)
 import Covenant.ExtendedASG
 import Covenant.Transform.Cata
 import Covenant.Transform.Common
-import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Elim
 import Covenant.Transform.Intro
+import Covenant.Transform.Pipeline.Common
 
 mkTypeFixerFnData ::
     forall m.
@@ -29,7 +29,7 @@ mkTypeFixerFnData ::
     m (Map TyName TyFixerDataBundle)
 mkTypeFixerFnData datatypes biRepHandlers =
     liftAppTransformM $ do
-        let allTyNames = M.keys datatypes 
+        let allTyNames = M.keys datatypes
         foldM go M.empty allTyNames
   where
     liftAppTransformM :: AppTransformM a -> m a
