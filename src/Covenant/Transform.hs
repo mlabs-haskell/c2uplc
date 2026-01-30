@@ -27,7 +27,7 @@ import Covenant.ASG (Id)
 import Covenant.MockPlutus (PlutusTerm, pBuiltin)
 import Covenant.Prim (OneArgFunc (..))
 import Covenant.Transform.Common
-import Covenant.Transform.Pipeline.Common (FirstPassMeta, PipelineData, unliftMetaM, type ConcretifyCxt, type TransformState)
+import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.ElimTyFixers (transformTypeFixerNodes)
 import Covenant.Transform.Pipeline.FirstPass (firstPass)
 import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)

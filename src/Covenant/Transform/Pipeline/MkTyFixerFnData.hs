@@ -17,6 +17,7 @@ import Control.Monad (foldM)
 import Covenant.ExtendedASG
 import Covenant.Transform.Cata
 import Covenant.Transform.Common
+import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Elim
 import Covenant.Transform.Intro
 

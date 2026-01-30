@@ -27,12 +27,11 @@ import Covenant.Type (
 
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (ix0)
-import Covenant.Test (Arg (UnsafeMkArg), CompNodeInfo (LamInternal), Id, list, unsafeMkDatatypeInfos)
+import Covenant.Test (Arg (UnsafeMkArg), CompNodeInfo (LamInternal), Id (UnsafeMkId), list, unsafeMkDatatypeInfos)
 import Data.Kind (Type)
 
 import Covenant.ExtendedASG
 import Covenant.Transform.Common
-import Covenant.Transform.Pipeline.Common
 import Data.Row.Records (Rec, (.+), (.==))
 
 import Algebra.Graph.AdjacencyMap
@@ -42,7 +41,7 @@ import Control.Monad.State.Strict (MonadState (get, put), MonadTrans (lift), Sta
 import Covenant.ArgDict
 import Covenant.Data (DatatypeInfo)
 import Covenant.MockPlutus
-import Covenant.Prim (OneArgFunc (IData, ListData, UnIData, UnListData))
+import Covenant.Prim (OneArgFunc (IData, ListData, UnIData, UnListData, BData, UnBData))
 import Covenant.Universe
 import Data.Foldable (foldrM, traverse_)
 import Data.Maybe (isJust, isNothing)
@@ -56,6 +55,7 @@ import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
+
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.
 
@@ -64,12 +64,101 @@ import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
    Ids, which are the source of the Unique for non-compiler-generated code).
 
    NOTE: I tried to write these in a sane way but they probably aren't maximally optimized.
+
+   NOTE: Things prefixed with '_' are intended to be declarations in the monad that are part of the
+         "runtime".
 -}
+
+{- ***************************
+   Default "scope" for stubs
+   ***************************
+
+   NOTE: Since the whole purpose of this monad is to automate tracking dependencies amongst
+         PLC stubs, you don't have to worry about putting too many declarations into the context.
+         The "runner" for the monad only generates things that are either accessible in the
+         "top level scope" or dependencies of such things.
+-}
+
+
+defStubs :: forall m. (MonadASG m) => StubM m ()
+defStubs = do
+    _fix
+    _recNat
+    _recNatN
+    _recNeg
+    _elimList
+    _recList
+    _pmap
+    _projBool
+    _embedBool
+    _projInt
+    _embedInt
+    _projByteString
+    _embedByteString
+    _id
+    embedList
+    _not
+    _and
+    _or
+    _cataNat
+    _cataNeg
+    _cataByteString 
 
 {- ***************************
    Hard-coded Catamorphisms
    ***************************
 -}
+
+{- r -> (r -> r) -> Integer -> r -}
+_cataNat :: forall m. MonadASG m => StubM m ()
+_cataNat = declare "cataNat" body
+  where
+    body :: StubM m PlutusTerm
+    body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+        recNat <- resolveStub "recNat"
+        let nIsNegative = n #< i 0
+        pure $ pIf nIsNegative
+                   pError
+                   (recNat # whenZ # whenS # n)
+
+{- r -> (r -> r) -> Integer -> r -}
+_cataNeg :: forall m. MonadASG m => StubM m ()
+_cataNeg = declare "cataNeg" body
+  where
+    body :: StubM m PlutusTerm
+    body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+        pNot <- resolveStub "not"
+        recNeg <- resolveStub "recNeg"
+        let nIsPositive = pNot # (n #<= i 0)
+        pure $ pIf nIsPositive
+                   pError
+                   (recNeg # whenZ # whenS # n)
+
+-- TODO need to test this
+_cataByteString :: forall m. MonadASG m => StubM m ()
+_cataByteString = declare "cataByteString" $ do
+  fix <- resolveStub "fix"
+  body <- go
+  pure $ fix # body 
+  where
+    go :: StubM m PlutusTerm
+    go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
+      pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
+        pure $ pIf (ix #== len)
+                   whenEmpty
+                   (whenNonEmpty
+                     # (originalBS #! ix)
+                     # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #- i 1)))
+
+--
+_cataList :: forall m. MonadASG m => StubM m ()
+_cataList = declare "cataList" $ do
+  fix <- resolveStub "fix"
+  body <- go
+  pure $ fix # body
+ where
+   go :: StubM m PlutusTerm
+   go = _
 
 {- *************************
    Stub Monad
@@ -77,12 +166,13 @@ import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 
    We need this for keeping track of dependencies between stubs. We want to make sure we
    do not duplicate generated code, and also we need to ensure that we `let` bind things in the
-   correct order in the emitted PLC.
+   correct order in the emitted PLC. Keeping track of the order manually has gotten unbearable, and
+   makes changes incredibly error-prone. This should solve that problem.
 -}
 
 data StubContext
     = StubContext
-    { bindings :: Map Text (Name, PlutusTerm)
+    { bindings :: Map Text (Name, PlutusTerm, Id) -- not everything actually needs an Id 
     , deps :: Map Text (Set Text) -- an adjacency list, basically
     , depsAcc :: Set Text
     }
@@ -129,22 +219,22 @@ compileStubM act =
                         . M.toList
                         . M.filterWithKey (\k _ -> k `S.member` reachableFromTop)
                         $ depCs
-            traceM $ "topDepss: " <> show topDeps
-            traceM $ "depCs: " <> show depCs
-            traceM $ "reachableFromTop: " <> show reachableFromTop
-            traceM $ "true deps: " <> show onlyTrueDeps
+            traceM $ "\ndeps: " <> show depCs
+            traceM $ "\ntopDeps: " <> show topDeps
+            traceM $ "\nreachableFromTop: " <> show reachableFromTop
+            traceM $ "\nonlyTrueDeps: " <> show (adjacencyList onlyTrueDeps)
             case topSort onlyTrueDeps of
                 Left ohNoACycle -> pure (Left $ DepCycle ohNoACycle)
                 Right (reverse -> depsInOrder) -> pure $ foldr (letBindEm binds) (Right inner) depsInOrder
   where
-    letBindEm ::
-        Map Text (Name, PlutusTerm) ->
+    letBindEm :: forall a.
+        Map Text (Name, PlutusTerm, a) ->
         Text ->
         Either StubError PlutusTerm ->
         Either StubError PlutusTerm
     letBindEm dict txtNm acc = case M.lookup txtNm dict of
         Nothing -> Left $ NoBinding txtNm
-        Just (pNm, body) -> pLet pNm body <$> acc
+        Just (pNm, body,_) -> pLet pNm body <$> acc
 
 -- for testing
 compileStub' :: (forall m. (MonadASG m) => StubM m PlutusTerm) -> Either StubError PlutusTerm
@@ -157,10 +247,19 @@ resolveStub :: (Monad m) => Text -> StubM m PlutusTerm
 resolveStub txt = do
     StubContext bs _ _ <- get
     case M.lookup txt bs of
-        Just (res, _) -> do
+        Just (res, _,_) -> do
             modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert txt acc)
             pure (pVar res)
         Nothing -> throwError $ NoBinding txt
+
+resolveStub' :: Monad m => Text -> StubM m (Name,PlutusTerm,Id)
+resolveStub' nm = do
+    StubContext bs _ _ <- get
+    case M.lookup nm bs of
+        Just res -> do
+            modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert nm acc)
+            pure res 
+        Nothing -> throwError $ NoBinding nm
 
 stubExists :: (Monad m) => Text -> StubM m Bool
 stubExists nm = do
@@ -172,16 +271,20 @@ stubExists nm = do
 declare :: forall m. (MonadASG m) => Text -> StubM m PlutusTerm -> StubM m ()
 declare nm mkStub =
     stubExists nm >>= \case
-        True ->
+        True -> pure ()
             -- I dont think this actually needs to be an error?
-            initAcc
-        False -> do
-            initAcc
-            stub <- mkStub
-            bindStub stub
+            -- initAcc
+        False -> withNoDeps $ do
+          stub <- mkStub
+          bindStub stub
   where
-    initAcc :: StubM m ()
-    initAcc = modify' $ \(StubContext _bs _ds _) -> StubContext _bs _ds mempty
+    withNoDeps :: StubM m a -> StubM m a
+    withNoDeps act = do
+      StubContext _ _ acc <- get
+      modify' $ \(StubContext a b _) -> StubContext a b mempty
+      res <- act
+      modify' $ \(StubContext a b _) -> StubContext a b acc
+      pure res
 
     bindStub :: PlutusTerm -> StubM m ()
     bindStub stub = do
@@ -190,13 +293,25 @@ declare nm mkStub =
             depsInScope = all (isJust . snd) resolvedDeps
         if depsInScope
             then do
-                plutusName <- freshNamePrefix nm
-                let ds' = M.insert nm acc ds
-                    bs' = M.insert nm (plutusName, stub) bs
+                plutusName@(Name _ (Unique w)) <- freshNamePrefix nm
+                let thisId = UnsafeMkId (fromIntegral w)
+                    ds' = M.insert nm acc ds
+                    bs' = M.insert nm (plutusName, stub, thisId) bs
                 put $ StubContext bs' ds' mempty
             else do
                 let notInScope = fst <$> filter (isNothing . snd) resolvedDeps
                 throwError $ MissingDeps nm (S.fromList notInScope)
+
+data HandlerType = Projection | Embedding
+  deriving stock (Show, Eq, Ord)
+
+-- Utility function for retrieving embeddings / projections. Will declare list projections if they do not exist
+selectHandler :: forall m. MonadASG m
+              => HandlerType
+              -> ValT AbstractTy
+              -> StubM m (Name,PlutusTerm,Id)
+selectHandler htype valT = case valT of
+  BuiltinFlat IntegerT -> resolveStub' "projInt"
 
 {-
    ***************************
@@ -265,35 +380,35 @@ projList nDepth projEl lst =
 
 Don't use this directly. Use projListWithType
 -}
+
+-- (Data -> a) -> Integer -> Data -> [a]
 projList ::
     forall (m :: Type -> Type) (a :: Type).
     (MonadASG m) =>
     DefaultUni (Esc a) -> StubM m PlutusTerm
-projList wit = do
-    mkSelectNil wit
-    body
+projList wit = body
   where
-    body = pFreshLam3' "projEl" "xs" "depth" $ \projEl xs depth -> do
-        tNil <- resolveStub (selectNilName wit)
-        pLetM' "mkNil" tNil $ \mkNil -> do
-            go <- mkGo mkNil
-            pure $ go # depth # projEl # xs
+    body = pFreshLam2' "projEl" "depth"  $ \projEl  depth  -> do
+        mkNil <- resolveStub (selectNilName wit)
+        go <- mkGo mkNil
+        pure $ go # depth # projEl 
 
     declNm = projListKey wit
 
     unList :: PlutusTerm -> PlutusTerm
     unList t = pBuiltin UnListData # t
 
+    -- Integer -> (Data -> a) -> Data -> [a]
     mkGo :: PlutusTerm -> StubM m PlutusTerm
-    mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
-        recNat <- resolveStub "recNat"
+    mkGo nil = pFreshLam2' "depth" "projEl"  $ \depth projEl -> do
+        recNat <- resolveStub "recNatN"
         mapF <- resolveStub "map"
-        goS <- pFreshLam3' "n" "f" "xs" $ \n f xs -> do
-            pure $ (mapF # (nil # n)) # f # unList xs
+        goS <- pFreshLam3' "n" "f" "ys" $ \n f ys -> do
+            pure $  (mapF # (nil # n)) # f # unList ys
         goZ <- do
             let map0 = mapF # (nil # mkConstant @Integer () 0)
             pFreshLam' "goZ_xs" $ \xs -> pure $ map0 # projEl # unList xs
-        pure $ recNat # goZ # goS # depth
+        pure $ (recNat # goZ # goS # depth)
 
 {- The version we'll actually use.  -}
 projListWithType ::
@@ -307,8 +422,10 @@ projListWithType dtDict valT projEl = case analyzeListTy dtDict valT of
     Nothing -> error $ "Cannot create list projection for " <> pValT valT
     Just (depth, MkUniProof wit) -> do
         let projFName = projListKey wit
-        projF <- projList wit
-        declare projFName $ pFreshLam' "xs" $ \xs -> pure $ projF # projEl # xs # mkConstant () depth
+        mkSelectNil wit
+        declare projFName $ do
+          projF <- projList wit
+          pure $ projF # projEl # mkConstant () depth 
 
 projListKey :: forall (a :: Type). DefaultUni (Esc a) -> Text
 projListKey w = "projList[" <> T.pack (show w) <> "]"
@@ -329,16 +446,50 @@ getListProj dict valT = case decideUniType dict valT of
    ***************************
 -}
 
-projBool :: (MonadASG m) => m PlutusTerm
-projBool = pFreshLam' "b" $ \b ->
+_projBool :: (MonadASG m) => StubM m ()
+_projBool = declare "projBool" $ pFreshLam' "b" $ \b ->
     pure $ caseConstrEnum b [mkConstant () True, mkConstant () False]
 
-embedBool :: (MonadASG m) => m PlutusTerm
-embedBool = pFreshLam' "b" $ \b ->
+_embedBool :: (MonadASG m) => StubM m ()
+_embedBool = declare "embedBool" $ pFreshLam' "b" $ \b ->
     pure $ pIf b troo fawlse
   where
     troo = mkConstant () $ Constr 0 []
     fawlse = mkConstant () $ Constr 1 []
+
+{- ***************************
+   Int Projection / Embedding
+   ***************************
+-}
+
+_projInt :: (MonadASG m) => StubM m ()
+_projInt = declare "projInt" $ pure (pBuiltin UnIData)
+
+_embedInt :: MonadASG m => StubM m ()
+_embedInt = declare "embedInt" $ pure (pBuiltin IData)
+
+
+{- *********************************
+   Bytestring Projection / Embedding
+   *********************************
+-}
+
+_projByteString :: MonadASG m => StubM m ()
+_projByteString = declare "projByteString" $ pure (pBuiltin UnBData)
+
+_embedByteString :: MonadASG m => StubM m ()
+_embedByteString = declare "embedByteString" $ pure (pBuiltin BData)
+
+{- *********************************
+   Misc things we need in scope
+   *********************************
+-}
+
+_id :: MonadASG m => StubM m ()
+_id = declare "id" $ pFreshLam $ \x -> pure x
+
+-- We aren't putting the unique error here because it needs to be removed anyway and nothing
+-- at the PLC level depends upon it (it's a trick for mocking functions in the ASG)
 
 {-  ***********
     Combinators
@@ -413,7 +564,7 @@ _recNeg = declare "recNeg" $ do
 {-  elimList :: forall a. (a -> List a -> r) -> r -> List a -> r -}
 _elimList :: (MonadASG m) => StubM m ()
 _elimList = declare "elimList" $
-    pFreshLam3' "goCons" "goNil" "xs" $ \goCons goNil xs ->
+    pFreshLam3' "goCons" "goNil" "ws" $ \goCons goNil xs ->
         pure $ pCase xs [goCons, goNil]
 
 {-
@@ -445,11 +596,11 @@ _pmap ::
     (MonadASG m) =>
     -- type-specific nil
     StubM m ()
-_pmap = declare "map" $ pFreshLam3' "map_f" "map_xs" "map_nil" $ \f xs nil -> do
-    goCons <- pFreshLam3' "self" "x" "xs" $ \self x xs -> pure $ pCons (f # x) (self # xs)
+_pmap = declare "map" $ pFreshLam2' "map_nil" "map_f" $ \nil f  -> do
+    goCons <- pFreshLam3' "self" "v" "vs" $ \self x xs -> pure $ pCons (f # x) (self # xs)
     goNil <- pFreshLam' "_" $ \_ -> pure nil
     recList <- resolveStub "recList"
-    pure $ recList # goCons # goNil
+    pure $ recList # goCons # goNil 
 
 {-
   This is a bit weird. This constructs an empty list value of the correct "depth"
@@ -505,16 +656,28 @@ mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
 selectNilName :: forall (a :: Type). DefaultUni (Esc a) -> Text
 selectNilName w = "selectNil[" <> T.pack (show w) <> "]"
 
-defStubs :: forall m. (MonadASG m) => StubM m ()
-defStubs = do
-    _fix
-    _recNat
-    _recNatN
-    _recNeg
-    _elimList
-    _recList
-    _pmap
-    embedList
+
+
+{-
+    *************
+    Logic
+    *************
+  NOTE: Uses case on bools for efficiency.
+-}
+
+_not :: forall m. MonadASG m =>  StubM m ()
+_not = declare "not" $ pFreshLam $ \b ->
+  pure $ pIf b (mkConstant () False) (mkConstant () True)
+
+_and :: forall m. (MonadASG m) => StubM m ()
+_and = declare "and" $ pFreshLam2 $ \b1 b2 ->
+  pure $ pIf b1 b2 (mkConstant () False)
+
+_or :: forall m. (MonadASG m) => StubM m ()
+_or = declare "or" $ pFreshLam2 $ \b1 b2 ->
+  pure $ pIf b1 (mkConstant () True) b2
+
+
 
 {-
     *************
@@ -525,105 +688,3 @@ defStubs = do
 i :: Integer -> PlutusTerm
 i = mkConstant ()
 
-{-
-  *************
-  Testing Stuff
-  *************
-
-  Eventually need to move to a test suite, but for now these are just some simple cases
-  and utilities for quick GHCI validation.
--}
-
-onlyList :: Map TyName (DatatypeInfo AbstractTy)
-onlyList = unsafeMkDatatypeInfos [list]
-
-listTy :: ValT AbstractTy -> ValT AbstractTy
-listTy t = Datatype "List" [t]
-
-testListTy0 = listTy $ BuiltinFlat IntegerT
-
-testListTy1 = listTy testListTy0
-
-testListTy2 = listTy testListTy1
-
-testList0 :: PlutusTerm
-testList0 = mkConstant @Data () (List (I <$> [1, 2, 3, 4, 5]))
-
-testList1 :: PlutusTerm
-testList1 = mkConstant @Data () (List (map List (map I <$> [[1], [2, 3], [4]])))
-
-testList2 :: PlutusTerm
-testList2 = mkConstant @Data () (List [List [List [I 1], List [I 2, I 3]], List [List [I 4]]])
-
-projInt :: forall m. (MonadASG m) => m PlutusTerm
-projInt = pFreshLam' "x" $ \x -> pure $ pBuiltin UnIData # x
-
-elimListTest :: (MonadASG m) => StubM m PlutusTerm
-elimListTest = do
-    elim <- resolveStub "elimList"
-    fCons <- pFreshLam2' "x" "xs" $ \x _xs -> pure x
-    pure $ elim # fCons # i 0 # depth1Ints
-
-testProjList :: (MonadASG m) => ValT AbstractTy -> PlutusTerm -> StubM m PlutusTerm
-testProjList listType listTerm = do
-    defStubs
-    projIntF <- projInt
-    projListWithType onlyList listType projIntF
-    projListF <- getListProj onlyList (BuiltinFlat IntegerT)
-    pure $ projListF # listTerm
-
-depth1Ints :: PlutusTerm
-depth1Ints = mkConstant @[[Integer]] () [[1, 2, 3], [4], [5, 6]]
-
-depth0Ints :: PlutusTerm
-depth0Ints = mkConstant @[Integer] () [1, 2, 3, 4]
-
--- FOR TESTING / INSPECTION ONLY
-embedListTest :: (MonadASG m) => StubM m PlutusTerm
-embedListTest = do
-    emb <- resolveStub "embedList"
-    iDat <- pFreshLam $ \x -> pure $ pBuiltin IData # x
-    pure $ emb # i 0 # iDat # depth0Ints
-
-mapTest :: (MonadASG m) => StubM m PlutusTerm
-mapTest = do
-    pmap <- resolveStub "map"
-    let _mapInts = pmap # (mkConstant @[Integer] () [])
-    _subOne <- pFreshLam' "sub_x" $ \x -> pure $ x #- i 1
-    pLetM' "map" _mapInts $ \mapInts ->
-        pLetM' "minus_one" _subOne $ \subOne ->
-            pure $ mapInts # subOne # depth1Ints
-
-recListTest :: (MonadASG m) => StubM m PlutusTerm
-recListTest = do
-    -- ([Int] -> Int) -> Int -> [Int] -> Int
-    fCons <- pFreshLam3' "self" "x" "xs" $ \_ x _ -> pure x
-    fNil <- pFreshLam' "_xs" $ \_ -> pure (i 0)
-    recList' <- resolveStub "recList"
-    pure $ recList' # fCons # fNil # depth1Ints
-
-testEmbTrue :: PlutusTerm
-testEmbTrue = runWithEmptyASG $ do
-    emb <- embedBool
-    pure $ emb # mkConstant () True
-
--- Round trips
-testProjTrue :: PlutusTerm
-testProjTrue = runWithEmptyASG $ do
-    emb <- embedBool
-    let embedded = emb # mkConstant () True
-    proj <- projBool
-    pure $ proj # embedded
-
-testEmbFalse :: PlutusTerm
-testEmbFalse = runWithEmptyASG $ do
-    emb <- embedBool
-    pure $ emb # mkConstant () False
-
--- Round trips
-testProjFalse :: PlutusTerm
-testProjFalse = runWithEmptyASG $ do
-    emb <- embedBool
-    let embedded = emb # mkConstant () False
-    proj <- projBool
-    pure $ proj # embedded

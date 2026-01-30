@@ -43,12 +43,14 @@ import PlutusCore.Data (Data (I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 
+import Covenant.CodeGen.Stubs
+
 -- From here on out the top level node CANNOT BE ASSUMED TO BE THE HIGHEST NODE NUMERICALLY.
 -- This is annoying but there really isn't a sensible way around it.
 --
 -- We also have to remember to "catch" the IDs for these functions during codegen
 -- since they won't have a body, so we're going to have to keep the map around for a while too.
-firstPass :: forall (m :: Type -> Type). (MonadASG m) => m (Rec FirstPassMeta)
+firstPass :: forall (m :: Type -> Type). (MonadASG m) => StubM m (Rec FirstPassMeta)
 firstPass = do
     uniqueErrorId <- ephemeralErrorId
     identityId <- mkIdentityFn

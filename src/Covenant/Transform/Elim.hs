@@ -35,6 +35,7 @@ import Optics.Core (view)
 
 import Covenant.ArgDict (pName, pValT, pValTs, pVec)
 import Covenant.Transform.Common
+import Covenant.Transform.Pipeline.Common
 import Debug.Trace (traceM)
 import UntypedPlutusCore ()
 

@@ -39,6 +39,8 @@ module Covenant.MockPlutus (
     (#-),
     (#+),
     (#==),
+    (#<),
+    (#!),
     pIf,
     pCons,
     pNilData,
@@ -253,11 +255,17 @@ x #<= y =
     let lte = Builtin () PB.LessThanEqualsInteger
      in lte # x # y
 
+(#<) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+x #< y = pBuiltin LessThanInteger # x # y 
+
 (#==) :: PlutusTerm -> PlutusTerm -> PlutusTerm
 x #== y = pBuiltin EqualsInteger # x # y
 
 (#+) :: PlutusTerm -> PlutusTerm -> PlutusTerm
 x #+ y = pBuiltin AddInteger # x # y
+
+(#!) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+bs #! ix = pBuiltin IndexByteString # bs # ix 
 
 -- This makes a builtin list, not data-wrapped
 pBuiltinList :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm

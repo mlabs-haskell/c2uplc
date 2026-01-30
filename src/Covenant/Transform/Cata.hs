@@ -40,6 +40,7 @@ import Data.Text qualified as T
 import Optics.Core (preview, review, view)
 
 import Covenant.Transform.Common
+import Covenant.Transform.Pipeline.Common
 
 -- A 'Nothing' result here indicates that the type isn't recursive
 mkCatamorphism :: TyName -> AppTransformM (Maybe TyFixerFnData)
