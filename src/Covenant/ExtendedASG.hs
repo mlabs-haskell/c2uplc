@@ -25,7 +25,7 @@ module Covenant.ExtendedASG (
     runWithEmptyASG,
 ) where
 
-import Control.Monad.RWS.Strict (MonadState (..), modify')
+import Control.Monad.RWS.Strict (MonadState (..), MonadTrans (lift), RWST, modify')
 import Control.Monad.State.Strict (State, StateT, evalState)
 import Covenant.ASG (ASG (ASG), ASGNode, Id, topLevelId)
 import Covenant.Test (Id (UnsafeMkId))
@@ -161,6 +161,10 @@ instance MonadASG (State ExtendedASG) where
     getASG = get
     putASG = put
 
+instance (Monoid w, MonadASG m) => MonadASG (RWST r w s m) where
+    getASG = lift getASG
+    putASG = lift . putASG
+
 -- test util
 runWithEmptyASG :: forall r. (forall m. (MonadASG m) => m r) -> r
 runWithEmptyASG f = evalState f (ExtendedASG M.empty M.empty (UnsafeMkId 0))
@@ -197,16 +201,16 @@ pattern IdentityFn :: Id -> ExtendedId
 pattern IdentityFn i <- IdentityFnId i
 
 pattern EphemeralError :: Id -> ExtendedId
-pattern EphemeralError i <- EphemeralErrorId i
+pattern EphemeralError i = EphemeralErrorId i
 
 pattern Projection :: Id -> ExtendedId
-pattern Projection i <- ProjectionId i
+pattern Projection i = ProjectionId i
 
 pattern Embedding :: Id -> ExtendedId
-pattern Embedding i <- EmbeddingId i
+pattern Embedding i = EmbeddingId i
 
 pattern TyFixerFn :: Id -> ExtendedId
-pattern TyFixerFn i <- TyFixerFnId i
+pattern TyFixerFn i = TyFixerFnId i
 
 {-# COMPLETE WrappedSrc, IdentityFn, EphemeralError, Projection, Embedding, TyFixerFn #-}
 

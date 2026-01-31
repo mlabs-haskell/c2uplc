@@ -17,7 +17,7 @@ import Covenant.ASG (
  )
 import Covenant.Type (
     AbstractTy,
-    BuiltinFlatT (ByteStringT, IntegerT),
+    BuiltinFlatT (..),
     CompT (Comp0, Comp1),
     CompTBody (ReturnT, (:--:>)),
     TyName,
@@ -41,7 +41,7 @@ import Control.Monad.State.Strict (MonadState (get, put), MonadTrans (lift), Sta
 import Covenant.ArgDict
 import Covenant.Data (DatatypeInfo)
 import Covenant.MockPlutus
-import Covenant.Prim (OneArgFunc (BData, IData, ListData, UnBData, UnIData, UnListData))
+import Covenant.Prim (OneArgFunc (..), SixArgFunc (ChooseData), TwoArgFunc (ConstrData, MkPairData))
 import Covenant.Universe
 import Data.Foldable (foldrM, traverse_)
 import Data.Maybe (isJust, isNothing)
@@ -49,11 +49,14 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Wedge (Wedge (..))
 import Debug.Trace (traceM)
 import PlutusCore.Data (Data (Constr, I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import UntypedPlutusCore (Term (Error))
+import UntypedPlutusCore.Evaluation.Machine.SteppableCek.DebugDriver (mkCekTrans)
 
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.
@@ -78,40 +81,71 @@ import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
          "top level scope" or dependencies of such things.
 -}
 
-defStubs :: forall m. (MonadASG m) => StubM m ()
+defStubs :: forall m. (MonadStub m) => m ()
 defStubs = do
+    -- identity fn
+    _id
+    -- Fix
     _fix
+    -- Integer "Library"
     _recNat
     _recNatN
     _recNeg
+    -- List "Library"
     _elimList
     _recList
     _pmap
-    _projBool
-    _embedBool
-    _projInt
-    _embedInt
-    _projByteString
-    _embedByteString
-    _id
-    embedList
+    -- Logic. Here in case I need it (won't get compiled if I don't)
     _not
     _and
     _or
+    -- Projections and Embeddings
+    do
+        -- Integer
+        _projInt
+        _embedInt
+        -- ByteString
+        _projByteString
+        _embedByteString
+        -- Bool
+        _projBool
+        _embedBool
+        -- List (the embedding is universal, but NOTE the args needed)
+        _embedList
+        -- Map
+        _projMap
+        _embedMap
+        -- String
+        _projString
+        _embedString
+        -- Unit
+        _projUnit
+        _embedUnit
+        -- BLS stuff (possibly superfluous)
+        _proj_BLS12_381_G1
+        _embed_BLS12_381_G1
+        _proj_BLS12_381_G2
+        _embed_BLS12_381_G2
+    -- Catamorphism drivers
     _cataNat
     _cataNeg
     _cataByteString
-
+    -- Match drivers
+    _matchList
+    _matchData
+    _matchPair
+    -- Intro forms
+    _mkPair
 {- ***************************
    Hard-coded Catamorphisms
    ***************************
 -}
 
 {- r -> (r -> r) -> Integer -> r -}
-_cataNat :: forall m. (MonadASG m) => StubM m ()
+_cataNat :: forall m. (MonadStub m) => m ()
 _cataNat = declare "cataNat" body
   where
-    body :: StubM m PlutusTerm
+    body :: m PlutusTerm
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
         recNat <- resolveStub "recNat"
         let nIsNegative = n #< i 0
@@ -122,10 +156,10 @@ _cataNat = declare "cataNat" body
                 (recNat # whenZ # whenS # n)
 
 {- r -> (r -> r) -> Integer -> r -}
-_cataNeg :: forall m. (MonadASG m) => StubM m ()
+_cataNeg :: forall m. (MonadStub m) => m ()
 _cataNeg = declare "cataNeg" body
   where
-    body :: StubM m PlutusTerm
+    body :: m PlutusTerm
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
         pNot <- resolveStub "not"
         recNeg <- resolveStub "recNeg"
@@ -137,13 +171,13 @@ _cataNeg = declare "cataNeg" body
                 (recNeg # whenZ # whenS # n)
 
 -- TODO need to test this
-_cataByteString :: forall m. (MonadASG m) => StubM m ()
+_cataByteString :: forall m. (MonadStub m) => m ()
 _cataByteString = declare "cataByteString" $ do
     fix <- resolveStub "fix"
     body <- go
     pure $ fix # body
   where
-    go :: StubM m PlutusTerm
+    go :: m PlutusTerm
     go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
         pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
             pure $
@@ -163,7 +197,83 @@ _cataList = declare "cataList" $ do
     pure $ fix # body
   where
     go :: StubM m PlutusTerm
-    go = _
+    go = error "Implement left-associative list catamorphism"
+
+{- **************************
+   Hard-coded Intro (Constructor) Functions
+   **************************
+-}
+
+-- cons is just the MkCons builtin which we can inline
+
+-- nil is really really annoying. we have to know the fully concretified type b/c reasons
+
+{- | This produces the correct empty list term directly and doesn't declare anything.
+  After pre-evaluation this will just reduce to the constant anyway. A 'Nothing' means
+  we cannot construct a builtin list of elements of that type.
+-}
+mkNil :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m (Maybe PlutusTerm)
+mkNil dtDict valT = case analyzeListTy dtDict valT of
+    Nothing -> pure Nothing
+    Just (depth, MkUniProof uni) -> do
+        let selectNilNm = selectNilName uni
+        mkSelectNil uni
+        selectNil <- resolveStub selectNilNm
+        pure . Just $ selectNil # i depth
+
+-- :: a -> b -> (a -> Data) -> (b -> Data) -> Pair a b
+_mkPair :: forall m. (MonadStub m) => m ()
+_mkPair = declare "Pair" $
+    pFreshLam2' "a" "b" $ \a b ->
+        pFreshLam2' "embedA" "embedB" $ \embedA embedB ->
+            pure $
+                pBuiltin MkPairData
+                    # (embedA # a)
+                    # (embedB # b)
+
+-- Data uses builtin functions (which we can just inline cuz smaller than vars probably) for intro forms.
+
+-- Map's intro form is just an identity function (it's a newtype on the intro side)
+
+{- **************************
+   Hard-coded Eliminator (Match) Functions
+   **************************
+-}
+
+-- this is just elimList with the arg order swapped to conform with the ctor order of our List decl
+_matchList :: forall m. (MonadStub m) => m ()
+_matchList = declare "matchList" $ pFreshLam3' "xs" "goNil" "goCons" $ \xs goNil goCons -> do
+    elim <- resolveStub "elimList"
+    pure $ elim # goCons # goNil # xs
+
+_matchData :: forall m. (MonadStub m) => m ()
+_matchData = declare "matchData" $
+    pFreshLam3' "dat" "goCtor" "goMap" $ \dat goCtor goMap ->
+        pFreshLam3' "goList" "goI" "goB" $ \goList goI goB -> do
+            goCtor' <- asCtor goCtor dat
+            pure $
+                pBuiltin ChooseData
+                    # dat
+                    # goCtor'
+                    # (goMap # (pBuiltin UnMapData # dat))
+                    # (goList # (pBuiltin UnListData # dat))
+                    # (goI # (pBuiltin UnIData # dat))
+                    # (goB # (pBuiltin UnBData # dat))
+  where
+    asCtor :: PlutusTerm -> PlutusTerm -> m PlutusTerm
+    asCtor goCtor scrut = do
+        pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
+            let ctorIx = pFst scrutAsIntDataPair
+                ctorArgs = pSnd scrutAsIntDataPair
+            pure $ goCtor # ctorIx # ctorArgs
+
+_matchPair :: forall m. (MonadStub m) => m ()
+_matchPair = declare "matchPair" $
+    pFreshLam' "aPair" $ \aPair ->
+        pFreshLam3' "f" "projA" "projB" $ \f projA projB -> do
+            let a = pFst aPair
+                b = pSnd aPair
+            pure $ f # (projA # a) # (projB # b)
 
 {- *************************
    Stub Monad
@@ -194,8 +304,10 @@ newtype StubM m a = StubM (ExceptT StubError (StateT StubContext m) a)
         ( Functor
         , Applicative
         , Monad
-        , MonadState StubContext
-        , MonadError StubError
+        , -- I am intentionally not defining a MonadState instance so it doesn't "clash"
+          -- with other instances. This will live at the bottom of a transformer stack with
+          -- RWS on top. (I suspect a MonadState instance would lead to annoying fundeps inference problems)
+          MonadError StubError
         )
         via (ExceptT StubError (StateT StubContext m))
 
@@ -203,6 +315,86 @@ instance (MonadASG m) => MonadASG (StubM m) where
     getASG = StubM . lift . lift $ getASG
 
     putASG asg = StubM . lift . lift $ putASG asg
+
+-- This is effectively a type class for things that contain a StubM somewhere in the stack
+-- It's inelegant but it's the only thing I can think of on short notice
+-- In theory any valid instance of this has to satisfy a kind of convoluted set of laws
+-- that i am not going to bother trying to explicate here
+class (MonadASG m, MonadError StubError m) => MonadStub m where
+    -- Must log the name in to the present context
+    stubData :: Text -> m (Name, PlutusTerm, Id)
+
+    -- Do we have a stub associated with the name provided?
+    stubExists :: Text -> m Bool
+
+    -- Don't use this directly! Use 'declare'
+    _bindStub :: Text -> PlutusTerm -> m ()
+
+    -- This is "treat this action as a top level declaration", i.e.,
+    -- run it with an empty "current scope" (the depsAcc field in StubContext)
+    asTopLevel :: forall a. m a -> m a
+
+instance (MonadASG m) => MonadStub (StubM m) where
+    stubData :: Text -> StubM m (Name, PlutusTerm, Id)
+    stubData nm = do
+        StubContext bs _ _ <- StubM get
+        case M.lookup nm bs of
+            Just res -> do
+                StubM $ modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert nm acc)
+                pure res
+            Nothing -> throwError $ NoBinding nm
+
+    stubExists :: (Monad m) => Text -> StubM m Bool
+    stubExists nm = do
+        StubContext bs ds _ <- StubM get
+        pure $ M.member nm bs
+
+    -- Don't use this directly!
+    _bindStub :: Text -> PlutusTerm -> StubM m ()
+    _bindStub nm stub = do
+        StubContext bs ds acc <- StubM get
+        let resolvedDeps = map (\x -> (x, M.lookup x ds)) (S.toList acc)
+            depsInScope = all (isJust . snd) resolvedDeps
+        if depsInScope
+            then do
+                plutusName@(Name _ (Unique w)) <- freshNamePrefix nm
+                let thisId = UnsafeMkId (fromIntegral w)
+                    ds' = M.insert nm acc ds
+                    bs' = M.insert nm (plutusName, stub, thisId) bs
+                StubM $ put $ StubContext bs' ds' mempty
+            else do
+                let notInScope = fst <$> filter (isNothing . snd) resolvedDeps
+                throwError $ MissingDeps nm (S.fromList notInScope)
+
+    asTopLevel :: forall a. StubM m a -> StubM m a
+    asTopLevel act = do
+        StubContext _ _ acc <- StubM get
+        StubM $ modify' $ \(StubContext a b _) -> StubContext a b mempty
+        res <- act
+        StubM $ modify' $ \(StubContext a b _) -> StubContext a b acc
+        pure res
+
+declare :: forall m. (MonadStub m) => Text -> m PlutusTerm -> m ()
+declare nm mkStub =
+    stubExists nm >>= \case
+        True -> pure ()
+        -- I dont think this actually needs to be an error?
+        False -> asTopLevel $ do
+            stub <- mkStub
+            _bindStub nm stub
+
+{- | This gets a variable reference to the stub, it does not
+  return the body of the stub. Compilation of the bodies is handled "automagically"
+  by compileStubM
+-}
+resolveStub :: (MonadStub m) => Text -> m PlutusTerm
+resolveStub nmTxt = do
+    (pName, _, _) <- stubData nmTxt
+    pure $ pVar pName
+
+-- sometimes we just need the Id (e.g. for constructing asg nodes)
+stubId :: (MonadStub m) => Text -> m Id
+stubId nm = stubData nm >>= \case (_, _, i) -> pure i
 
 runStubM :: forall m a. (MonadASG m) => StubM m a -> m (Either StubError (StubContext, a))
 runStubM (StubM act) =
@@ -249,83 +441,69 @@ compileStub' act = runWithEmptyASG compiled
     compiled :: forall m. (MonadASG m) => m (Either StubError PlutusTerm)
     compiled = compileStubM act
 
-resolveStub :: (Monad m) => Text -> StubM m PlutusTerm
-resolveStub txt = do
-    StubContext bs _ _ <- get
-    case M.lookup txt bs of
-        Just (res, _, _) -> do
-            modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert txt acc)
-            pure (pVar res)
-        Nothing -> throwError $ NoBinding txt
-
-resolveStub' :: (Monad m) => Text -> StubM m (Name, PlutusTerm, Id)
-resolveStub' nm = do
-    StubContext bs _ _ <- get
-    case M.lookup nm bs of
-        Just res -> do
-            modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert nm acc)
-            pure res
-        Nothing -> throwError $ NoBinding nm
-
-stubExists :: (Monad m) => Text -> StubM m Bool
-stubExists nm = do
-    StubContext bs ds _ <- get
-    pure $ M.member nm bs
-
--- clears the dependency accumulator before and after it runs, you can't nest calls to declare,
--- this is only a tool for sorting out top-level dependencies amongst stubs
-declare :: forall m. (MonadASG m) => Text -> StubM m PlutusTerm -> StubM m ()
-declare nm mkStub =
-    stubExists nm >>= \case
-        True -> pure ()
-        -- I dont think this actually needs to be an error?
-        -- initAcc
-        False -> withNoDeps $ do
-            stub <- mkStub
-            bindStub stub
-  where
-    withNoDeps :: StubM m a -> StubM m a
-    withNoDeps act = do
-        StubContext _ _ acc <- get
-        modify' $ \(StubContext a b _) -> StubContext a b mempty
-        res <- act
-        modify' $ \(StubContext a b _) -> StubContext a b acc
-        pure res
-
-    bindStub :: PlutusTerm -> StubM m ()
-    bindStub stub = do
-        StubContext bs ds acc <- get
-        let resolvedDeps = map (\x -> (x, M.lookup x ds)) (S.toList acc)
-            depsInScope = all (isJust . snd) resolvedDeps
-        if depsInScope
-            then do
-                plutusName@(Name _ (Unique w)) <- freshNamePrefix nm
-                let thisId = UnsafeMkId (fromIntegral w)
-                    ds' = M.insert nm acc ds
-                    bs' = M.insert nm (plutusName, stub, thisId) bs
-                put $ StubContext bs' ds' mempty
-            else do
-                let notInScope = fst <$> filter (isNothing . snd) resolvedDeps
-                throwError $ MissingDeps nm (S.fromList notInScope)
-
-data HandlerType = Projection | Embedding
+data HandlerType = Proj | Embed
     deriving stock (Show, Eq, Ord)
 
+fst3 :: (a, b, c) -> a
+fst3 (a, b, c) = a
+
 -- Utility function for retrieving embeddings / projections. Will declare list projections if they do not exist
-selectHandler ::
+trySelectHandler ::
     forall m.
-    (MonadASG m) =>
+    (MonadStub m) =>
+    Map TyName (DatatypeInfo AbstractTy) ->
     HandlerType ->
     ValT AbstractTy ->
-    StubM m (Name, PlutusTerm, Id)
-selectHandler htype valT = case valT of
-    BuiltinFlat IntegerT -> resolveStub' "projInt"
+    m (Maybe PlutusTerm)
+trySelectHandler dtDict htype valT = case valT of
+    BuiltinFlat bi -> case htype of
+        Proj -> case bi of
+            IntegerT -> Just <$> resolveStub "projInt"
+            ByteStringT -> Just <$> resolveStub "projByteString"
+            BoolT -> Just <$> resolveStub "projBool"
+            StringT -> Just <$> resolveStub "projString"
+            UnitT -> Just <$> resolveStub "projUnit"
+            BLS12_381_G1_ElementT -> Just <$> resolveStub "proj_BLS12_381_G1"
+            BLS12_381_G2_ElementT -> Just <$> resolveStub "proj_BLS12_381_G2"
+            _ -> pure Nothing
+        Embed -> case bi of
+            IntegerT -> Just <$> resolveStub "embedInt"
+            ByteStringT -> Just <$> resolveStub "embedByteString"
+            BoolT -> Just <$> resolveStub "embedBool"
+            StringT -> Just <$> resolveStub "embedString"
+            UnitT -> Just <$> resolveStub "embedUnit"
+            BLS12_381_G1_ElementT -> Just <$> resolveStub "embed_BLS12_381_G1"
+            BLS12_381_G2_ElementT -> Just <$> resolveStub "embed_BLS12_381_G2"
+            _ -> pure Nothing
+    Datatype "Pair" _args -> case htype of
+        Proj -> Just <$> resolveStub "projPair"
+        Embed -> Just <$> resolveStub "embedPair"
+    Datatype "Map" _args -> case htype of
+        Proj -> Just <$> resolveStub "projMap"
+        Embed -> Just <$> resolveStub "embedMap"
+    listTy@(Datatype "List" args) -> case analyzeListTy dtDict listTy of
+        Nothing -> pure Nothing
+        Just (depth, MkUniProof uni) -> case htype of
+            Embed -> do
+                let innerTy = unsafeReflect uni
+                trySelectHandler dtDict htype innerTy >>= \case
+                    Nothing -> pure Nothing -- probably should be an error
+                    Just embedInner -> do
+                        embedList <- resolveStub "embedList"
+                        pure . Just $ embedList # i depth # embedInner
+            Proj -> do
+                let innerTy = unsafeReflect uni
+                trySelectHandler dtDict htype innerTy >>= \case
+                    Nothing -> pure Nothing -- again, probably should be an error! TODO this
+                    Just projInner -> do
+                        projListWithType dtDict listTy projInner
+                        Just <$> resolveStub (projListKey uni)
+    _ -> pure Nothing
 
 {-
    ***************************
    List Projection & Embedding
    ***************************
-
 -}
 
 {- This is morally similar to something we can only express properly with dependent types, i.e.,
@@ -347,22 +525,22 @@ selectHandler htype valT = case valT of
     depends on the value of `n`. We could type it in, like, Agda or something)
 -}
 
-embedList ::
+_embedList ::
     forall (m :: Type -> Type).
-    (MonadASG m) =>
-    StubM m ()
-embedList = declare "embedList" fun
+    (MonadStub m) =>
+    m ()
+_embedList = declare "embedList" fun
   where
     listify x = pBuiltin ListData # x
     -- morally: Integer -> ((a -> b) -> List a -> List b) -> ... (can't express this without dep types see above)
-    mkGo :: StubM m PlutusTerm
+    mkGo :: m PlutusTerm
     mkGo =
         pFreshLam3' "go_Depth" "go_embEl" "go_mapF" $ \depth embEl mapF -> do
             recNat <- resolveStub "recNat"
             goS <- pFreshLam2' "f" "xs" $ \f xs -> pure $ listify (mapF # f # xs)
             pure $ recNat # embEl # goS # depth
 
-    fun :: StubM m PlutusTerm
+    fun :: m PlutusTerm
     fun = pFreshLam3' "fun_Depth" "fun_embEl" "fun_xs" $ \depth innerF xs -> do
         map <- resolveStub "map"
         pLetM (map # pNilData) $ \mapF -> do
@@ -392,8 +570,8 @@ Don't use this directly. Use projListWithType
 -- (Data -> a) -> Integer -> Data -> [a]
 projList ::
     forall (m :: Type -> Type) (a :: Type).
-    (MonadASG m) =>
-    DefaultUni (Esc a) -> StubM m PlutusTerm
+    (MonadStub m) =>
+    DefaultUni (Esc a) -> m PlutusTerm
 projList wit = body
   where
     body = pFreshLam2' "projEl" "depth" $ \projEl depth -> do
@@ -407,7 +585,7 @@ projList wit = body
     unList t = pBuiltin UnListData # t
 
     -- Integer -> (Data -> a) -> Data -> [a]
-    mkGo :: PlutusTerm -> StubM m PlutusTerm
+    mkGo :: PlutusTerm -> m PlutusTerm
     mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
         recNat <- resolveStub "recNatN"
         mapF <- resolveStub "map"
@@ -421,11 +599,11 @@ projList wit = body
 {- The version we'll actually use.  -}
 projListWithType ::
     forall (m :: Type -> Type).
-    (MonadASG m) =>
+    (MonadStub m) =>
     Map TyName (DatatypeInfo AbstractTy) ->
     ValT AbstractTy ->
     PlutusTerm ->
-    StubM m ()
+    m ()
 projListWithType dtDict valT projEl = case analyzeListTy dtDict valT of
     Nothing -> error $ "Cannot create list projection for " <> pValT valT
     Just (depth, MkUniProof wit) -> do
@@ -440,25 +618,61 @@ projListKey w = "projList[" <> T.pack (show w) <> "]"
 
 -- The idea is that we'll do one pass where we generate them all and then in a later pass we use this to look
 -- up things we expect to be generated.
-getListProj' :: forall m (a :: Type). (MonadASG m) => DefaultUni (Esc a) -> StubM m PlutusTerm
+getListProj' :: forall m (a :: Type). (MonadStub m) => DefaultUni (Esc a) -> m PlutusTerm
 getListProj' w = resolveStub (projListKey w)
 
 -- | TAKES THE BASE/INNERMOST TYPE, NOT THE FULL LIST TYPE
-getListProj :: forall m. (MonadASG m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> StubM m PlutusTerm
+getListProj :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m PlutusTerm
 getListProj dict valT = case decideUniType dict valT of
     Nothing -> throwError $ WitnessFail valT
     Just (MkUniProof w) -> getListProj' w
+
+{- ***************************
+   Map Projection / Embedding
+   ***************************
+
+   NOTE: Ugh pair can't stay data encoded at all times
+-}
+
+pairData :: DefaultUni (Esc (Data, Data))
+pairData = DefaultUniProtoPair `DefaultUniApply` DefaultUniData `DefaultUniApply` DefaultUniData
+
+_projMap :: forall m. (MonadStub m) => m ()
+_projMap = declare "projMap" $ pFreshLam' "mapCtorOfData" $ \mapCtorOfData -> do
+    pure (pBuiltin UnMapData # mapCtorOfData)
+
+_embedMap :: forall m. (MonadStub m) => m ()
+_embedMap = declare "embedMap" $ pFreshLam' "listOfData" $ \listOfPairData ->
+    pure $ pBuiltin MapData # listOfPairData
+
+{- ***************************
+   Pair Projection / Embedding
+   ***************************
+
+   NOTE: The "offchain" representation of Pair is (Data,Data) ALWAYS. Its AsData form is `Ctor 0 [a,b]``
+-}
+
+_projPair :: forall m. (MonadStub m) => m ()
+_projPair = declare "projPair" $ pFreshLam' "dataPair" $ \dataPair -> do
+    let innerDataList = pSnd (pBuiltin UnConstrData # dataPair)
+    pCaseList innerDataList $ \a rest -> do
+        let b = pBuiltin HeadList # rest
+        pure $ pBuiltin MkPairData # a # b
+
+_embedPair :: forall m. (MonadStub m) => m ()
+_embedPair = declare "embedPair" $ pFreshLam' "aPair" $ \dataPair -> do
+    pure $ pBuiltin ConstrData # i 0 # pCons (pFst dataPair) (pCons (pSnd dataPair) pNilData)
 
 {- ***************************
    Bool Projection / Embedding
    ***************************
 -}
 
-_projBool :: (MonadASG m) => StubM m ()
+_projBool :: (MonadStub m) => m ()
 _projBool = declare "projBool" $ pFreshLam' "b" $ \b ->
     pure $ caseConstrEnum b [mkConstant () True, mkConstant () False]
 
-_embedBool :: (MonadASG m) => StubM m ()
+_embedBool :: (MonadStub m) => m ()
 _embedBool = declare "embedBool" $ pFreshLam' "b" $ \b ->
     pure $ pIf b troo fawlse
   where
@@ -470,10 +684,10 @@ _embedBool = declare "embedBool" $ pFreshLam' "b" $ \b ->
    ***************************
 -}
 
-_projInt :: (MonadASG m) => StubM m ()
+_projInt :: (MonadStub m) => m ()
 _projInt = declare "projInt" $ pure (pBuiltin UnIData)
 
-_embedInt :: (MonadASG m) => StubM m ()
+_embedInt :: (MonadStub m) => m ()
 _embedInt = declare "embedInt" $ pure (pBuiltin IData)
 
 {- *********************************
@@ -481,19 +695,77 @@ _embedInt = declare "embedInt" $ pure (pBuiltin IData)
    *********************************
 -}
 
-_projByteString :: (MonadASG m) => StubM m ()
+_projByteString :: (MonadStub m) => m ()
 _projByteString = declare "projByteString" $ pure (pBuiltin UnBData)
 
-_embedByteString :: (MonadASG m) => StubM m ()
+_embedByteString :: (MonadStub m) => m ()
 _embedByteString = declare "embedByteString" $ pure (pBuiltin BData)
+
+{- ****************************
+   String Projection / Embedding
+   ****************************
+-}
+
+_projString :: (MonadStub m) => m ()
+_projString = declare "projString" $ pFreshLam' "utf8_data" $ \utf8_data ->
+    pure $ pBuiltin DecodeUtf8 # (pBuiltin UnBData # utf8_data)
+
+_embedString :: (MonadStub m) => m ()
+_embedString = declare "embedString" $ pFreshLam' "aString" $ \aString ->
+    pure $ pBuiltin BData # (pBuiltin EncodeUtf8 # aString)
+
+{- ****************************
+   Unit Projection / Embedding
+   ****************************
+-}
+
+_projUnit :: (MonadStub m) => m ()
+_projUnit = declare "projUnit" $ pFreshLam' "unitData" $ \unitData ->
+    pure $ mkConstant () ()
+
+_embedUnit :: (MonadStub m) => m ()
+_embedUnit = declare "embedUnit" $ pFreshLam' "aUnit" $ \aUnit ->
+    pure $ mkConstant () (Constr 0 [])
+
+{- ****************************
+   BLS Primitive Projection / Embedding
+   ****************************
+
+   NOTE: These are probably superfluous since they don't exist in ledger types... but
+         I guess in theory someone might want to put them on the chain? Maybe?
+-}
+
+_proj_BLS12_381_G1 :: (MonadStub m) => m ()
+_proj_BLS12_381_G1 = declare "proj_BLS12_381_G1" $ pFreshLam' "blsG1Data" $ \blsG1Data ->
+    pure $ pBuiltin BLS12_381_G1_uncompress # (pBuiltin UnBData # blsG1Data)
+
+_embed_BLS12_381_G1 :: (MonadStub m) => m ()
+_embed_BLS12_381_G1 = declare "embed_BLS12_381_G1" $ pFreshLam' "blsG1" $ \blsG1 ->
+    pure $ pBuiltin BData # (pBuiltin BLS12_381_G1_compress # blsG1)
+
+_proj_BLS12_381_G2 :: (MonadStub m) => m ()
+_proj_BLS12_381_G2 = declare "proj_BLS12_381_G2" $ pFreshLam' "blsG2Data" $ \blsG2Data ->
+    pure $ pBuiltin BLS12_381_G2_uncompress # (pBuiltin UnBData # blsG2Data)
+
+_embed_BLS12_381_G2 :: (MonadStub m) => m ()
+_embed_BLS12_381_G2 = declare "embed_BLS12_381_G2" $ pFreshLam' "blsG2" $ \blsG2 ->
+    pure $ pBuiltin BData # (pBuiltin BLS12_381_G2_compress # blsG2)
 
 {- *********************************
    Misc things we need in scope
    *********************************
 -}
 
-_id :: (MonadASG m) => StubM m ()
+_id :: (MonadStub m) => m ()
 _id = declare "id" $ pFreshLam $ \x -> pure x
+
+-- we don't use an an error node at the plc in case we accidentally forget to remove this.
+-- the error node at the covenant level is necessary
+_error :: (MonadStub m) => m ()
+_error = do
+    declare "error" $ pure (mkConstant () ())
+    (_, _, i) <- stubData "error"
+    eInsert (EphemeralError i) AnError
 
 -- We aren't putting the unique error here because it needs to be removed anyway and nothing
 -- at the PLC level depends upon it (it's a trick for mocking functions in the ASG)
@@ -510,7 +782,7 @@ _id = declare "id" $ pFreshLam $ \x -> pure x
 -}
 
 -- "PLC level" version
-_fix :: (MonadASG m) => StubM m ()
+_fix :: (MonadStub m) => m ()
 _fix = declare "fix" $ do
     pFreshLam' "f" $ \f -> do
         g <- pFreshLam' "x" $ \x -> do
@@ -524,7 +796,7 @@ _fix = declare "fix" $ do
 -}
 
 {- r -> (r -> r) ->  Integer -> r -}
-_recNat :: (MonadASG m) => StubM m ()
+_recNat :: (MonadStub m) => m ()
 _recNat = declare "recNat" $ do
     fix <- resolveStub "fix"
     body <- go
@@ -535,7 +807,7 @@ _recNat = declare "recNat" $ do
         pure $ pIf isZero whenZ (whenS # (self # whenZ # whenS # (n #- i 1)))
 
 --  r -> (r -> Integer -> r) ->  Integer -> r
-_recNatN :: (MonadASG m) => StubM m ()
+_recNatN :: (MonadStub m) => m ()
 _recNatN = declare "recNatN" $ do
     fix <- resolveStub "fix"
     body <- go
@@ -546,7 +818,7 @@ _recNatN = declare "recNatN" $ do
             whenS' = whenS # n
         pure $ pIf isZero whenZ (whenS' # (self # whenZ # whenS # (n #- i 1)))
 
-_recNeg :: (MonadASG m) => StubM m ()
+_recNeg :: (MonadStub m) => m ()
 _recNeg = declare "recNeg" $ do
     fix <- resolveStub "fix"
     body <- go
@@ -569,7 +841,7 @@ _recNeg = declare "recNeg" $ do
 -}
 
 {-  elimList :: forall a. (a -> List a -> r) -> r -> List a -> r -}
-_elimList :: (MonadASG m) => StubM m ()
+_elimList :: (MonadStub m) => m ()
 _elimList = declare "elimList" $
     pFreshLam3' "goCons" "goNil" "ws" $ \goCons goNil xs ->
         pure $ pCase xs [goCons, goNil]
@@ -582,8 +854,8 @@ _elimList = declare "elimList" $
      r
 -}
 _recList ::
-    (MonadASG m) =>
-    StubM m ()
+    (MonadStub m) =>
+    m ()
 _recList = declare "recList" $ do
     elim <- resolveStub "elimList"
     fix <- resolveStub "fix"
@@ -600,9 +872,9 @@ _recList = declare "recList" $ do
    Untyped PLC so we pass the empty list itself.
 -}
 _pmap ::
-    (MonadASG m) =>
+    (MonadStub m) =>
     -- type-specific nil
-    StubM m ()
+    m ()
 _pmap = declare "map" $ pFreshLam2' "map_nil" "map_f" $ \nil f -> do
     goCons <- pFreshLam3' "self" "v" "vs" $ \self x xs -> pure $ pCons (f # x) (self # xs)
     goNil <- pFreshLam' "_" $ \_ -> pure nil
@@ -628,9 +900,9 @@ _pmap = declare "map" $ pFreshLam2' "map_nil" "map_f" $ \nil f -> do
 -}
 mkSelectNil ::
     forall (m :: Type -> Type) (a :: Type).
-    (MonadASG m) =>
+    (MonadStub m) =>
     DefaultUni (Esc a) ->
-    StubM m ()
+    m ()
 mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
     pure $
         pCase
@@ -670,15 +942,15 @@ selectNilName w = "selectNil[" <> T.pack (show w) <> "]"
   NOTE: Uses case on bools for efficiency.
 -}
 
-_not :: forall m. (MonadASG m) => StubM m ()
+_not :: forall m. (MonadStub m) => m ()
 _not = declare "not" $ pFreshLam $ \b ->
     pure $ pIf b (mkConstant () False) (mkConstant () True)
 
-_and :: forall m. (MonadASG m) => StubM m ()
+_and :: forall m. (MonadStub m) => m ()
 _and = declare "and" $ pFreshLam2 $ \b1 b2 ->
     pure $ pIf b1 b2 (mkConstant () False)
 
-_or :: forall m. (MonadASG m) => StubM m ()
+_or :: forall m. (MonadStub m) => m ()
 _or = declare "or" $ pFreshLam2 $ \b1 b2 ->
     pure $ pIf b1 (mkConstant () True) b2
 

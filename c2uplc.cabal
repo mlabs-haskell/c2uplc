@@ -122,6 +122,7 @@ library
     Covenant.Transform.Pipeline.ElimTyFixers
     Covenant.Transform.Pipeline.FirstPass
     Covenant.Transform.Pipeline.MkTyFixerFnData
+    Covenant.Transform.Pipeline.Monad
     Covenant.Transform.Pipeline.ResolveRepPoly
     Covenant.Transform.Schema
     Covenant.Transform.TyUtils
@@ -149,4 +150,11 @@ test-suite compilation
   type:           exitcode-stdio-1.0
   main-is:        Main.hs
   hs-source-dirs: test/compilation
+  build-depends:  plutus-core ==1.51.0.0
+
+test-suite stubs
+  import:         test-lang
+  type:           exitcode-stdio-1.0
+  main-is:        Main.hs
+  hs-source-dirs: test/stubs
   build-depends:  plutus-core ==1.51.0.0

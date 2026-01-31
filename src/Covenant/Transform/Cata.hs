@@ -41,12 +41,14 @@ import Optics.Core (preview, review, view)
 
 import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Monad
+import Data.Map.Strict (Map)
 
 -- A 'Nothing' result here indicates that the type isn't recursive
-mkCatamorphism :: TyName -> AppTransformM (Maybe TyFixerFnData)
+mkCatamorphism :: TyName -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe TyFixerFnData)
 mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe TyFixerFnData)
+    go :: DatatypeInfo AbstractTy -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe TyFixerFnData)
     go dtInfo = case view #originalDecl dtInfo of
         OpaqueData{} -> pure Nothing
         nonOpaqueDecl ->
@@ -90,7 +92,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         Text ->
         DataEncoding ->
         TypeSchema ->
-        AppTransformM PlutusTerm
+        PassM (Map TyName (DatatypeInfo AbstractTy)) () PlutusTerm
     -- \* TODO/FIXME: We really need to check whether it has a builtin encoding first and process that separately. Most of what we do here isn't useful for those.
     genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase _enc schema = do
         {- NOTE: This is a bit different than the other cases. Here, a cata function will have a type like:
@@ -219,7 +221,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
          In non-cata cases, we don't have any kind of "handlers" to insert, but here we have to account for the application of
          `self` to recursive calls.
 -}
-mkWrappedHandlerSOP :: PlutusTerm -> Count "tyvar" -> ValT AbstractTy -> PlutusTerm -> AppTransformM PlutusTerm
+mkWrappedHandlerSOP :: PlutusTerm -> Count "tyvar" -> ValT AbstractTy -> PlutusTerm -> PassM (Map TyName (DatatypeInfo AbstractTy)) () PlutusTerm
 mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandlerTy of
     -- The count of this function HAS to be 0, we forbid polymorphic handlers (somewhere). REVIEW: Where?
     ThunkT (CompN _ (ArgsAndResult armHandlerArgTys _)) -> do

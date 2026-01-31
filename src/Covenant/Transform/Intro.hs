@@ -37,6 +37,7 @@ import Optics.Core (view)
 
 import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Monad
 import Data.Map (Map)
 import Data.Map qualified as M
 import Debug.Trace

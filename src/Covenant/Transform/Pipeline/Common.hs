@@ -32,9 +32,11 @@ import Data.Kind (Type)
 import Data.Void (Void)
 
 import Covenant.ArgDict (pValT, pVec)
+import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), trySelectHandler)
 import Covenant.ExtendedASG
 import Covenant.MockPlutus (PlutusTerm, pVar, ppTerm)
 import Covenant.Transform.Common
+import Covenant.Transform.Pipeline.Monad
 import Covenant.Transform.TyUtils (AppId, LambdaId (LambdaId), idToName)
 import Data.Map qualified as M
 import Data.Row.Records (HasType, Rec, Row, type (.+), type (.==))
@@ -53,7 +55,6 @@ type ConcretifyCxt =
         .+ "callPath" .== Vector LambdaId
         .+ "appPath" .== Vector AppId
         .+ "tyFixers" .== Map Id TyFixerFnData
-        .+ "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
         .+ "identityFn" .== ExtendedId
         .+ "uniqueError" .== ExtendedId
 
@@ -61,16 +62,8 @@ instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
     getASG = get
     putASG = put
 
--- Row type synonyms for our various states
-type FirstPassMeta =
-    "builtinHandlers" .== Map BuiltinFlatT PolyRepHandler
-        .+ "identityFn" .== ExtendedId
-        .+ "uniqueError" .== ExtendedId
-
 type TransformState =
-    FirstPassMeta
-        .+ "asg" .== ExtendedASG
-        .+ "visited" .== Set ExtendedId
+    "visited" .== Set ExtendedId
         .+ "dtDict" .== Map TyName (DatatypeInfo AbstractTy)
         .+ "tyFixerData" .== Map TyName TyFixerDataBundle
         .+ "tyFixers" .== Map Id TyFixerFnData
@@ -130,54 +123,16 @@ runMetaM aRec (MetaM act) = runState act aRec
 syntheticLamNode :: UniqueError -> CompT AbstractTy -> ASGNode
 syntheticLamNode (UniqueError errId) funTy = ACompNode funTy (LamInternal (AnId errId))
 
-{- We need somewhere to stash these Ids (i.e. a reader context) since it's awkward to
-   insert them into the ASG before we complete our analysis pass in the AppTranformM monad
--}
-data PolyRepHandler = PolyRepHandler {project :: Id, embed :: Id} deriving stock (Show, Eq)
-
--- N.B. we need the `Map BuiltinFlatT Id` to record the projection/embedding function ids
--- TODO: Errors?
-newtype AppTransformM a = AppTransformM (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () ExtendedASG a)
-    deriving
-        ( Functor
-        , Applicative
-        , Monad
-        , MonadReader (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler)
-        , MonadState ExtendedASG
-        )
-        via (RWS (Map TyName (DatatypeInfo AbstractTy), Map BuiltinFlatT PolyRepHandler) () ExtendedASG)
-
-instance MonadASG AppTransformM where
-    getASG = get
-    putASG = put
-
-runAppTransformM ::
-    Map TyName (DatatypeInfo AbstractTy) ->
-    Map BuiltinFlatT PolyRepHandler ->
-    ExtendedASG ->
-    AppTransformM a ->
-    (a, ExtendedASG)
-runAppTransformM datatypes polyRepHandlers asg (AppTransformM act) = (x, i)
-  where
-    (x, i, _) = runRWS act (datatypes, polyRepHandlers) asg
-
 -- stupid helpers
 
 -- Something has gone really, horrifically wrong if something is annotated w/ a datatype type
 -- and we don't know about the datatype at this point.
-lookupDatatypeInfo :: TyName -> AppTransformM (DatatypeInfo AbstractTy)
+lookupDatatypeInfo :: TyName -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (DatatypeInfo AbstractTy)
 lookupDatatypeInfo tn@(TyName tnInner) = do
-    (dtDict, _) <- ask
+    dtDict <- ask
     case M.lookup tn dtDict of
         Just res -> pure res
         Nothing -> error $ "No datatype info for " <> T.unpack tnInner
-
-lookupPolyRepHandler :: ValT AbstractTy -> AppTransformM (Maybe PolyRepHandler)
-lookupPolyRepHandler = \case
-    BuiltinFlat biFlat -> do
-        (_, repHandlerMap) <- ask
-        pure $ M.lookup biFlat repHandlerMap
-    _ -> pure Nothing
 
 {- This is a helper for constructing a function which is used in all of the type fixer
    code generators to locate the correct plutus term corresponding to projection or embedding
@@ -186,7 +141,7 @@ lookupPolyRepHandler = \case
    In practice, locating this requires both:
      1. Information specific to the datatype. For type variables, we add the handlers as arguments to the
         type fixer "synthetic function".
-     2. Generic information for statically known concrete builtin flat types, which we access from the AppTransformM
+     2. Generic information for statically known concrete builtin flat types, which we access from the PassM (Map TyName (DatatypeInfo AbstractTy)) ()
         monadic context.
 
    Largely a convenience b/c the implementation has to be somewhat ugly and is effectively duplicated several times.
@@ -206,7 +161,7 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
     -- and which functions somewhat analogously to a projection/embedding function)
     Maybe (Index "tyvar") ->
     ValT AbstractTy ->
-    AppTransformM (Maybe PlutusTerm)
+    PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe PlutusTerm)
 resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
     traceM msg >> case valT of
         Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of
@@ -214,16 +169,13 @@ resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
                 Just rIndex | indx == rIndex -> traceM "resolve r" >> pure . Just $ lamArgVars Vector.! 0
                 _ -> traceM "resolve no handler no r" >> pure Nothing
             Just hIx -> traceM ("resolve result: " <> show hIx) >> pure . pure $ lamArgVars Vector.! hIx
-        bi@(BuiltinFlat _) -> do
-            mRepHandler <- lookupPolyRepHandler bi
-            case mRepHandler of
-                Nothing -> traceM "resolve no polyRepHandler" >> pure Nothing
-                Just polyRepHandler -> do
-                    let handler = extractHandler polyRepHandler
-                        msg = "resolve found poly rep handler " <> ppTerm handler
-                    traceM msg
-                    pure . Just $ handler
-        _anythingElse -> traceM "resolve nothing catchall" >> pure Nothing
+        other -> do
+            dtDict <- ask
+            let hType = case nodeKind of
+                    CataNode -> Proj
+                    MatchNode -> Proj
+                    IntroNode -> Embed
+            trySelectHandler dtDict hType other
   where
     msg =
         "\nresolvePolyRep:\n  "
@@ -234,9 +186,3 @@ resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
             <> pVec ppTerm lamArgVars
             <> "\n  maybeR: "
             <> show maybeR
-
-    extractHandler :: PolyRepHandler -> PlutusTerm
-    extractHandler (PolyRepHandler projF embedF) = case nodeKind of
-        MatchNode -> pVar . idToName $ projF
-        CataNode -> pVar . idToName $ projF
-        IntroNode -> pVar . idToName $ embedF

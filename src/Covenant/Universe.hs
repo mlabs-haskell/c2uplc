@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -25,6 +26,22 @@ data UniProof :: Type where
 
 data ListProof :: Type where
     MkListProof :: forall (a :: Type). DefaultUni (Esc [a]) -> ListProof
+
+-- Don't use it on anything that might be a Vector. Though IDK why the hell anyone ever would
+unsafeReflect :: forall (a :: Type) (b :: Type). DefaultUni (Esc a) -> ValT b
+unsafeReflect = \case
+    DefaultUniInteger -> BuiltinFlat IntegerT
+    DefaultUniByteString -> BuiltinFlat ByteStringT
+    DefaultUniString -> BuiltinFlat StringT
+    DefaultUniUnit -> BuiltinFlat UnitT
+    DefaultUniBool -> BuiltinFlat BoolT
+    DefaultUniData -> Datatype "Data" []
+    DefaultUniBLS12_381_MlResult -> BuiltinFlat BLS12_381_MlResultT
+    DefaultUniBLS12_381_G1_Element -> BuiltinFlat BLS12_381_G1_ElementT
+    DefaultUniBLS12_381_G2_Element -> BuiltinFlat BLS12_381_G2_ElementT
+    DefaultUniApply DefaultUniProtoList t -> Datatype "List" [unsafeReflect t]
+    DefaultUniApply (DefaultUniApply DefaultUniProtoPair a) b -> Datatype "Pair" [unsafeReflect a, unsafeReflect b]
+    other -> error $ "Oops! You misued usafeReflect. It probably shouldn't be used on things like: " <> show other
 
 {- Takes a dictionary containing type information (to look up encodings) and a value type,
    and returns a proof that the equivalent Plutus type is a member of the default Plutus universe
