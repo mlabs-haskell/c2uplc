@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedLists #-}
+
 module Covenant.Transform.Elim where
 
 import Data.Vector (Vector)
@@ -5,16 +7,19 @@ import Data.Vector qualified as Vector
 
 import Covenant.Type (
     AbstractTy,
-    CompT (CompN),
-    CompTBody (ArgsAndResult),
+    BuiltinFlatT (ByteStringT, IntegerT),
+    CompT (Comp0, Comp1, Comp2, Comp3, CompN),
+    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
+    DataDeclaration (DataDeclaration, OpaqueData),
     DataEncoding (BuiltinStrategy, PlutusData, SOP),
     PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
     TyName (TyName),
-    ValT (ThunkT),
+    ValT (BuiltinFlat, Datatype, ThunkT),
+    tyvar,
  )
 
 import Control.Monad.Except (runExceptT)
-import Covenant.Data (DatatypeInfo, mkMatchFunTy)
+import Covenant.Data (DatatypeInfo (DatatypeInfo), mkMatchFunTy)
 import Covenant.MockPlutus (
     PlutusTerm,
     pApp,
@@ -33,9 +38,16 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Optics.Core (view)
 
+import Control.Monad.RWS.Strict (MonadReader, MonadState)
 import Covenant.ArgDict (pName, pValT, pValTs, pVec)
+import Covenant.CodeGen.Stubs (MonadStub)
+import Covenant.DeBruijn
+import Covenant.Index
 import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Monad
+import Data.Kind (Type)
+import Data.Map.Strict (Map)
 import Debug.Trace (traceM)
 import UntypedPlutusCore ()
 
@@ -72,10 +84,19 @@ import UntypedPlutusCore ()
 -}
 
 -- The ONLY case where we should end up with Nothing is something isomorphic to Void
-mkDestructorFunction :: TyName -> AppTransformM (Maybe TyFixerFnData)
+mkDestructorFunction ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader Datatypes m
+    , MonadState RepPolyHandlers m
+    ) =>
+    TyName ->
+    m (Maybe TyFixerFnData)
 mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> AppTransformM (Maybe TyFixerFnData)
+    go :: DatatypeInfo AbstractTy -> m (Maybe TyFixerFnData)
+    go (DatatypeInfo OpaqueData{} _ _ _) = error "TODO Opaque eliminators"
+    go (DatatypeInfo (DataDeclaration _ _ _ enc@(BuiltinStrategy _)) _ _ _) = Just <$> builtinElimForm tn enc
     go dtInfo = do
         let ogDecl = view #originalDecl dtInfo
         case runExceptT (mkMatchFunTy ogDecl) of
@@ -115,7 +136,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         Text ->
         DataEncoding ->
         TypeSchema ->
-        AppTransformM PlutusTerm
+        m PlutusTerm
     genElimFormPLC (CompN _ (ArgsAndResult origMatchFnArgs _)) nameBase enc schema = do
         -- These are the FULL arguments to the function (not the synthetic type we use for analysis),
         -- and this comes from the schema generator. This type includes projection/embedding functions, the
@@ -168,7 +189,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
             DataSchema _ handlerArgPosDict -> do
                 -- This lets us look up the name (i.e. the var bound by our lambda) which corresponds to the
                 -- projection/embedding function we need to use for a particular value with a bare tyvar type
-                let resolveUnwrapper :: ValT AbstractTy -> AppTransformM (Maybe PlutusTerm)
+                let resolveUnwrapper :: ValT AbstractTy -> m (Maybe PlutusTerm)
                     resolveUnwrapper = resolvePolyRepHandler MatchNode handlerArgPosDict lamArgVars Nothing
 
                 case enc of
@@ -231,3 +252,80 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                             resolveUnwrapper realScrutTy >>= \case
                                 Nothing -> pure . lamBuilder $ pApp thisBranchHandlerTerm scrutinee
                                 Just projFn -> pure . lamBuilder $ pApp thisBranchHandlerTerm (pApp projFn scrutinee)
+
+-- as with intro forms, covenant doesn't export some stuff we need and i'm in a huge rush
+-- eventually we should dispatch on the DataEncoding not the TyName (but this will work for now)
+-- NOTE: As with the intro functions, these are the "public" function types and we will handle
+--       conjuring the "real" function types for the underlying PLC during the rep poly resolution pass
+builtinElimForm ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader Datatypes m
+    , MonadState RepPolyHandlers m
+    ) =>
+    TyName ->
+    DataEncoding ->
+    m TyFixerFnData
+builtinElimForm (TyName tn) _enc = case tn of
+    "List" -> do
+        let matchListTy =
+                Comp2 $
+                    listT a
+                        :--:> b
+                        :--:> thunk0 (a' :--:> listT a' :--:> ReturnT b')
+                        :--:> ReturnT b
+        pure $ BuiltinTyFixer matchListTy List_Match
+    "Pair" -> do
+        let matchPairTy =
+                Comp3 $
+                    pairT a b
+                        :--:> thunk0 (a' :--:> b' :--:> ReturnT c')
+                        :--:> ReturnT c
+        pure $ BuiltinTyFixer matchPairTy Pair_Match
+    "Map" -> do
+        let matchMapTy =
+                Comp3 $
+                    mapT a b
+                        :--:> thunk0 (listT (pairT a' b') :--:> ReturnT c')
+                        :--:> ReturnT c'
+        pure $ BuiltinTyFixer matchMapTy Map_Match
+    "Data" -> do
+        let matchDataTy =
+                Comp1 $
+                    dataT
+                        :--:> thunk0 (intT :--:> listT dataT :--:> ReturnT a')
+                        :--:> thunk0 (listT (pairT dataT dataT) :--:> ReturnT a')
+                        :--:> thunk0 (listT dataT :--:> ReturnT a')
+                        :--:> thunk0 (intT :--:> ReturnT a')
+                        :--:> thunk0 (byteStringT :--:> ReturnT a')
+                        :--:> ReturnT a'
+        pure $ BuiltinTyFixer matchDataTy Data_Match
+    _ -> error $ "builtin elimination forms not supported for type: " <> T.unpack tn
+  where
+    thunk0 = ThunkT . Comp0
+
+    dataT :: ValT AbstractTy
+    dataT = dt "Data" []
+
+    listT :: ValT AbstractTy -> ValT AbstractTy
+    listT t = dt "List" [t]
+
+    pairT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
+    pairT x y = dt "Pair" [x, y]
+
+    -- The ADT not the ctor of data
+    mapT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
+    mapT k v = dt "Map" [k, v]
+
+    intT = BuiltinFlat IntegerT
+    byteStringT = BuiltinFlat ByteStringT
+
+    a = tyvar Z ix0
+    b = tyvar Z ix1
+    c = tyvar Z ix2
+
+    a' = tyvar (S Z) ix0
+    b' = tyvar (S Z) ix1
+    c' = tyvar (S Z) ix2
+
+    dt = Datatype

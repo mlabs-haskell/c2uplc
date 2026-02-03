@@ -28,6 +28,7 @@ module Covenant.Transform.Common (
     pCaseListWith,
     genFiniteListEliminator,
     pCaseConstrData,
+    BuiltinFnData (..),
     -- re-exports from Schema
     TypeSchema (..),
     schemaFnArgs,
@@ -128,14 +129,43 @@ prettyMap' = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> a
 -}
 data TyFixerFnData
     = TyFixerFnData
-    { mfTyName :: TyName
-    , mfEncoding :: DataEncoding
-    , mfPolyType :: CompT AbstractTy
-    , mfCompiled :: PlutusTerm
-    , mfTypeSchema :: TypeSchema
-    , mfFunName :: Text
-    , mfNodeKind :: TyFixerNodeKind
-    }
+        { mfTyName :: TyName
+        , mfEncoding :: DataEncoding
+        , mfPolyType :: CompT AbstractTy
+        , mfCompiled :: PlutusTerm
+        , mfTypeSchema :: TypeSchema
+        , mfFunName :: Text
+        , mfNodeKind :: TyFixerNodeKind
+        }
+    | BuiltinTyFixer (CompT AbstractTy) BuiltinFnData
+
+-- BuiltinFnData holds the information we need to compile every "compiler primitive" non-atomic datatype.
+-- This is needed in large part because we cannot generate a corresponding Plutus Term for parametric
+-- builtins (mainly List) until we've already completed an analysis that comes after the type fixer transform
+-- (this could be avoided, probably, but I don't have time)
+-- We don't need to stash any information inside of these. We just need to know which Ids point at which of them,
+-- and have a computation type we can use for analysis.
+data BuiltinFnData
+    = -- Constructors
+      List_Cons
+    | List_Nil
+    | Data_I
+    | Data_B
+    | Data_List
+    | Data_Map
+    | Data_Constr
+    | Pair_Pair
+    | Map_Map
+    | -- Catamorphisms
+      Integer_Nat
+    | Integer_Neg
+    | List_Cata
+    | ByteString_Cata
+    | -- Eliminators
+      List_Match
+    | Pair_Match
+    | Map_Match
+    | Data_Match
 
 data TyFixerNodeKind = MatchNode | IntroNode | CataNode
     deriving stock (Show, Eq, Ord)

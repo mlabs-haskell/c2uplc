@@ -1,4 +1,6 @@
 {- HLINT ignore "Use if" -}
+{-# LANGUAGE OverloadedLists #-}
+{- HLINT ignore "Use if" -}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -10,19 +12,21 @@ import Data.Vector qualified as Vector
 
 import Covenant.Type (
     AbstractTy (BoundAt),
-    CompT (CompN),
-    CompTBody (ArgsAndResult),
+    BuiltinFlatT (ByteStringT, IntegerT),
+    CompT (Comp0, Comp2, CompN),
+    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
     Constructor (Constructor),
     DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding,
+    DataEncoding (BuiltinStrategy),
     TyName (TyName),
-    ValT (Abstraction, Datatype, ThunkT),
+    ValT (..),
+    tyvar,
  )
 
 import Control.Monad.Except (runExceptT)
-import Covenant.Data (DatatypeInfo, mkCataFunTy)
-import Covenant.DeBruijn (DeBruijn (S))
-import Covenant.Index (Count, intCount, intIndex)
+import Covenant.Data (DatatypeInfo (DatatypeInfo), mkCataFunTy)
+import Covenant.DeBruijn (DeBruijn (..))
+import Covenant.Index (Count, intCount, intIndex, ix0, ix1, ix2)
 import Covenant.MockPlutus (
     PlutusTerm,
     pApp,
@@ -39,16 +43,31 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Optics.Core (preview, review, view)
 
+import Control.Monad.RWS.Strict (MonadReader, MonadState)
+import Covenant.CodeGen.Stubs (MonadStub)
 import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad
+import Data.Kind (Type)
 import Data.Map.Strict (Map)
 
+-- NOTE: 'Natural' and 'Negative' + The ByteString cata don't really fit in here
+--       so we have to add them manually when we call this
+--  (TODO: Make sure we do that )
 -- A 'Nothing' result here indicates that the type isn't recursive
-mkCatamorphism :: TyName -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe TyFixerFnData)
+mkCatamorphism ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader Datatypes m
+    , MonadState RepPolyHandlers m
+    ) =>
+    TyName ->
+    m (Maybe TyFixerFnData)
 mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
-    go :: DatatypeInfo AbstractTy -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe TyFixerFnData)
+    go :: DatatypeInfo AbstractTy -> m (Maybe TyFixerFnData)
+    go (DatatypeInfo OpaqueData{} _ _ _) = pure Nothing -- have to catch opaques here since they technically have a builtin strategy
+    go (DatatypeInfo (DataDeclaration _ _ _ enc@(BuiltinStrategy _)) _ _ _) = builtinCataForm tyNameInner enc
     go dtInfo = case view #originalDecl dtInfo of
         OpaqueData{} -> pure Nothing
         nonOpaqueDecl ->
@@ -92,7 +111,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         Text ->
         DataEncoding ->
         TypeSchema ->
-        PassM (Map TyName (DatatypeInfo AbstractTy)) () PlutusTerm
+        m PlutusTerm
     -- \* TODO/FIXME: We really need to check whether it has a builtin encoding first and process that separately. Most of what we do here isn't useful for those.
     genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase _enc schema = do
         {- NOTE: This is a bit different than the other cases. Here, a cata function will have a type like:
@@ -193,6 +212,54 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 caseBody <- pCaseConstrData scrutinee typedHandlers resolveShim
                 pure . lamBuilder $ caseBody
 
+builtinCataForm ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader Datatypes m
+    , MonadState RepPolyHandlers m
+    ) =>
+    Text ->
+    DataEncoding ->
+    m (Maybe TyFixerFnData)
+builtinCataForm nm enc = case nm of
+    "List" -> do
+        let cataListTy =
+                Comp2 $
+                    listT a
+                        :--:> b
+                        :--:> thunk0 (a' :--:> b' :--:> ReturnT b')
+                        :--:> ReturnT b
+        pure . Just $ BuiltinTyFixer cataListTy List_Cata
+    _ -> pure Nothing
+  where
+    thunk0 = ThunkT . Comp0
+
+    dataT :: ValT AbstractTy
+    dataT = dt "Data" []
+
+    listT :: ValT AbstractTy -> ValT AbstractTy
+    listT t = dt "List" [t]
+
+    pairT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
+    pairT x y = dt "Pair" [x, y]
+
+    -- The ADT not the ctor of data
+    mapT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
+    mapT k v = dt "Map" [k, v]
+
+    intT = BuiltinFlat IntegerT
+    byteStringT = BuiltinFlat ByteStringT
+
+    a = tyvar Z ix0
+    b = tyvar Z ix1
+    c = tyvar Z ix2
+
+    a' = tyvar (S Z) ix0
+    b' = tyvar (S Z) ix1
+    c' = tyvar (S Z) ix2
+
+    dt = Datatype
+
 {- This is a helper used to handle code generation for the "arms" of a catamorphism.
 
    The first argument is a "self" variable passed in from the cata codegen function which is used to implement the
@@ -221,7 +288,13 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
          In non-cata cases, we don't have any kind of "handlers" to insert, but here we have to account for the application of
          `self` to recursive calls.
 -}
-mkWrappedHandlerSOP :: PlutusTerm -> Count "tyvar" -> ValT AbstractTy -> PlutusTerm -> PassM (Map TyName (DatatypeInfo AbstractTy)) () PlutusTerm
+mkWrappedHandlerSOP ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader Datatypes m
+    , MonadState RepPolyHandlers m
+    ) =>
+    PlutusTerm -> Count "tyvar" -> ValT AbstractTy -> PlutusTerm -> m PlutusTerm
 mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandlerTy of
     -- The count of this function HAS to be 0, we forbid polymorphic handlers (somewhere). REVIEW: Where?
     ThunkT (CompN _ (ArgsAndResult armHandlerArgTys _)) -> do

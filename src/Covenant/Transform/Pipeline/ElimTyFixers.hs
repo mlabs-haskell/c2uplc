@@ -27,7 +27,7 @@ import Covenant.Type (
     ValT (Datatype),
  )
 
-import Control.Monad.State.Strict (gets, modify')
+import Control.Monad.State.Strict (MonadState, gets, modify')
 import Covenant.Test (Arg (UnsafeMkArg), ValNodeInfo (AppInternal))
 import Data.Foldable (
     traverse_,
@@ -39,24 +39,35 @@ import Covenant.Transform.Common
 import Data.Row.Records qualified as R
 import Data.Set qualified as Set
 
+import Control.Monad.RWS.Strict (MonadReader)
+import Covenant.CodeGen.Stubs (MonadStub)
 import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Monad (Datatypes)
 import Covenant.Transform.TyUtils
+import Data.Kind (Type)
+import Data.Row.Records (Rec)
 
 {- Rewrites type fixer nodes into applications.
 
    This also constructs and inserts dummy functions into the ASG
 -}
-transformTypeFixerNodes :: MetaM TransformState ()
+transformTypeFixerNodes ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadState (Rec TransformState) m
+    , MonadReader Datatypes m
+    ) =>
+    m ()
 transformTypeFixerNodes = do
-    topSrcNode <- fst <$> (eTopLevelSrcNode :: MetaM TransformState (ExtendedId, ASGNode))
+    topSrcNode <- fst <$> eTopLevelSrcNode
     go topSrcNode --  dtDict magicErr tyFixers
   where
-    conjureFunction :: CompT AbstractTy -> MetaM TransformState ASGNode
+    conjureFunction :: CompT AbstractTy -> m ASGNode
     conjureFunction compT = do
         errId <- forgetExtendedId <$> gets (R..! #uniqueError)
         pure $ syntheticLamNode (UniqueError errId) compT
 
-    resolveCtorIx :: TyName -> ConstructorName -> MetaM TransformState (Maybe Int)
+    resolveCtorIx :: TyName -> ConstructorName -> m (Maybe Int)
     resolveCtorIx tn cn = do
         dtInfo <- (M.! tn) <$> gets (R..! #dtDict)
         case view #originalDecl dtInfo of
@@ -83,7 +94,7 @@ transformTypeFixerNodes = do
         other -> error $ "unsafeDatatypeName called on non-datatype ValT: " <> show other
 
     -- only use this on things that have to be a value type (i.e. scrutinees)
-    unsafeRefType :: Ref -> MetaM TransformState (ValT AbstractTy)
+    unsafeRefType :: Ref -> m (ValT AbstractTy)
     unsafeRefType = \case
         AnArg (UnsafeMkArg _ _ ty) -> pure ty
         AnId i ->
@@ -91,16 +102,16 @@ transformTypeFixerNodes = do
                 ValNodeType ty -> pure ty
                 other -> error $ "UnsafeRefType called on an Id with a non-ValT type: " <> show other
 
-    alreadyVisited :: ExtendedId -> MetaM TransformState Bool
+    alreadyVisited :: ExtendedId -> m Bool
     alreadyVisited i = S.member i <$> gets (R..! #visited)
 
-    insertAndMarkVisited :: ExtendedId -> ASGNode -> MetaM TransformState ()
+    insertAndMarkVisited :: ExtendedId -> ASGNode -> m ()
     insertAndMarkVisited eid node = do
         eInsert eid node
         oldVisited <- gets (R..! #visited)
         modify' $ R.update #visited (S.insert eid oldVisited)
 
-    go :: ExtendedId -> MetaM TransformState ()
+    go :: ExtendedId -> m ()
     go i =
         alreadyVisited i >>= \case
             True -> pure ()
@@ -186,7 +197,7 @@ transformTypeFixerNodes = do
                                             insertAndMarkVisited ctorFnId syntheticCtorFnNode
                             traverse_ goRef ctorArgs
       where
-        goRef :: Ref -> MetaM TransformState ()
+        goRef :: Ref -> m ()
         goRef = \case
             AnId child -> resolveExtended child >>= go
             AnArg{} -> pure ()

@@ -5,8 +5,13 @@ import Control.Monad.State.Strict
 
 import Control.Monad.Except (MonadError)
 import Covenant.CodeGen.Stubs
+import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG
+import Covenant.MockPlutus (PlutusTerm)
+import Covenant.Test (Id)
+import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
+import Data.Map.Strict (Map)
 
 {- I need some kind of unifying abstraction for all the transformation passes here.
 
@@ -97,3 +102,6 @@ runPass ::
 runPass r s (PassM act) = do
     (a, s', _) <- runRWST act r s
     pure (a, s')
+
+newtype RepPolyHandlers = RepPolyHandlers (Map Id (PlutusTerm, HandlerType, ValT AbstractTy))
+newtype Datatypes = Datatypes (Map TyName (DatatypeInfo AbstractTy))

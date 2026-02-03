@@ -751,6 +751,8 @@ _embed_BLS12_381_G2 :: (MonadStub m) => m ()
 _embed_BLS12_381_G2 = declare "embed_BLS12_381_G2" $ pFreshLam' "blsG2" $ \blsG2 ->
     pure $ pBuiltin BData # (pBuiltin BLS12_381_G2_compress # blsG2)
 
+-- Ml_Result - Has no data encoding NOTE: Need to error here
+
 {- *********************************
    Misc things we need in scope
    *********************************

@@ -32,7 +32,7 @@ import Data.Kind (Type)
 import Data.Void (Void)
 
 import Covenant.ArgDict (pValT, pVec)
-import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), trySelectHandler)
+import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), MonadStub, trySelectHandler)
 import Covenant.ExtendedASG
 import Covenant.MockPlutus (PlutusTerm, pVar, ppTerm)
 import Covenant.Transform.Common
@@ -63,7 +63,8 @@ instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
     putASG = put
 
 type TransformState =
-    "visited" .== Set ExtendedId
+    "uniqueError" .== ExtendedId
+        .+ "visited" .== Set ExtendedId
         .+ "dtDict" .== Map TyName (DatatypeInfo AbstractTy)
         .+ "tyFixerData" .== Map TyName TyFixerDataBundle
         .+ "tyFixers" .== Map Id TyFixerFnData
@@ -127,9 +128,9 @@ syntheticLamNode (UniqueError errId) funTy = ACompNode funTy (LamInternal (AnId 
 
 -- Something has gone really, horrifically wrong if something is annotated w/ a datatype type
 -- and we don't know about the datatype at this point.
-lookupDatatypeInfo :: TyName -> PassM (Map TyName (DatatypeInfo AbstractTy)) () (DatatypeInfo AbstractTy)
+lookupDatatypeInfo :: (MonadReader Datatypes m) => TyName -> m (DatatypeInfo AbstractTy)
 lookupDatatypeInfo tn@(TyName tnInner) = do
-    dtDict <- ask
+    Datatypes dtDict <- ask
     case M.lookup tn dtDict of
         Just res -> pure res
         Nothing -> error $ "No datatype info for " <> T.unpack tnInner
@@ -147,6 +148,8 @@ lookupDatatypeInfo tn@(TyName tnInner) = do
    Largely a convenience b/c the implementation has to be somewhat ugly and is effectively duplicated several times.
 -}
 resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exists)
+    forall (m :: Type -> Type).
+    (MonadStub m, MonadReader Datatypes m) =>
     TyFixerNodeKind ->
     -- Gives us the index into the list of terms representing
     -- function arguments which corresponds to the projection/embedding function
@@ -161,7 +164,7 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
     -- and which functions somewhat analogously to a projection/embedding function)
     Maybe (Index "tyvar") ->
     ValT AbstractTy ->
-    PassM (Map TyName (DatatypeInfo AbstractTy)) () (Maybe PlutusTerm)
+    m (Maybe PlutusTerm)
 resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
     traceM msg >> case valT of
         Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of
@@ -170,7 +173,7 @@ resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
                 _ -> traceM "resolve no handler no r" >> pure Nothing
             Just hIx -> traceM ("resolve result: " <> show hIx) >> pure . pure $ lamArgVars Vector.! hIx
         other -> do
-            dtDict <- ask
+            Datatypes dtDict <- ask
             let hType = case nodeKind of
                     CataNode -> Proj
                     MatchNode -> Proj

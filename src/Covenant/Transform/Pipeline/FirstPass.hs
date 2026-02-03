@@ -15,7 +15,7 @@ import Covenant.ASG (
  )
 import Covenant.Type (
     AbstractTy,
-    BuiltinFlatT (ByteStringT, IntegerT),
+    BuiltinFlatT (BLS12_381_G1_ElementT, BLS12_381_G2_ElementT, BoolT, ByteStringT, IntegerT, StringT, UnitT),
     CompT (Comp0, Comp1),
     CompTBody (ReturnT, (:--:>)),
     TyName,
@@ -25,7 +25,7 @@ import Covenant.Type (
 
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (ix0)
-import Covenant.Test (Arg (UnsafeMkArg), CompNodeInfo (LamInternal), list, unsafeMkDatatypeInfos)
+import Covenant.Test (Arg (UnsafeMkArg), CompNodeInfo (LamInternal), Id, list, unsafeMkDatatypeInfos)
 import Data.Kind (Type)
 
 import Covenant.ExtendedASG
@@ -43,37 +43,51 @@ import PlutusCore.Data (Data (I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 
+import Control.Monad.RWS.Strict (MonadReader (ask), modify')
 import Covenant.CodeGen.Stubs
+import Covenant.Transform.Pipeline.Monad
+import Data.Text (Text)
+import UntypedPlutusCore (Name)
 
--- From here on out the top level node CANNOT BE ASSUMED TO BE THE HIGHEST NODE NUMERICALLY.
--- This is annoying but there really isn't a sensible way around it.
---
--- We also have to remember to "catch" the IDs for these functions during codegen
--- since they won't have a body, so we're going to have to keep the map around for a while too.
-firstPass :: forall (m :: Type -> Type). (MonadASG m) => StubM m (Rec FirstPassMeta)
+{- Mainly what this does is to ensure that all of the "primitive" projection/embedding functions
+   (which means: for everything except List) have corresponding dummy nodes in the ASG.
+
+   We will have to insert handlers for statically known "compound" projection/embeddings (i.e. for statically
+   known concrete list types) during compilation of intro/elim/cata.
+-}
+
+-- The ValT is the type *of the thing being projected* not of the *projection function* or anything like that.
+
+firstPass :: PassM Datatypes RepPolyHandlers ()
 firstPass = do
     uniqueErrorId <- ephemeralErrorId
-    identityId <- mkIdentityFn
     eInsert uniqueErrorId AnError
-    polyRepHandlers <- M.unions <$> traverse (mkRepHandler uniqueErrorId) ([IntegerT, ByteStringT] :: [BuiltinFlatT])
-    pure $
-        #builtinHandlers .== polyRepHandlers
-            .+ #identityFn .== identityId
-            .+ #uniqueError .== uniqueErrorId
+    mapM_ (uncurry (bindPrimStub uniqueErrorId)) ((Proj,) <$> primTypes)
+    mapM_ (uncurry (bindPrimStub uniqueErrorId)) ((Embed,) <$> primTypes)
   where
-    mkRepHandler :: ExtendedId -> BuiltinFlatT -> m (Map BuiltinFlatT PolyRepHandler)
-    mkRepHandler errId t = do
-        projT <- projectionId
-        embedT <- embeddingId
-        let synthFnTy = Comp0 $ BuiltinFlat t :--:> ReturnT (BuiltinFlat t)
-            synthFnNode = syntheticLamNode (UniqueError . forgetExtendedId $ errId) synthFnTy
-        eInsert projT synthFnNode
-        eInsert embedT synthFnNode
-        pure $ M.singleton t (PolyRepHandler (forgetExtendedId projT) (forgetExtendedId embedT))
+    primTypes :: [ValT AbstractTy]
+    primTypes = [intT, boolT, stringT, byteStringT, unitT, blsG1T, blsG2T]
+    intT = BuiltinFlat IntegerT
+    boolT = BuiltinFlat BoolT
+    stringT = BuiltinFlat StringT
+    byteStringT = BuiltinFlat ByteStringT
+    unitT = BuiltinFlat UnitT
+    blsG1T = BuiltinFlat BLS12_381_G1_ElementT
+    blsG2T = BuiltinFlat BLS12_381_G2_ElementT
+    -- Pairs and Map are weird because the types "lie" (the args to Pair are "as if it were data encoded", i.e., they are
+    -- Data internally and get projected by *matching on the pair*.)
 
-    mkIdentityFn :: m ExtendedId
-    mkIdentityFn = do
-        idFnId <- identityFnId
-        let compNode = ACompNode (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0)) (LamInternal (AnArg (UnsafeMkArg Z ix0 (tyvar Z ix0))))
-        eInsert idFnId compNode
-        pure idFnId
+    bindPrimStub :: ExtendedId -> HandlerType -> ValT AbstractTy -> PassM Datatypes RepPolyHandlers ()
+    bindPrimStub errId htype ty =
+        ask >>= \(Datatypes dtDict) ->
+            trySelectHandler dtDict htype ty >>= \case
+                Nothing -> error $ "Error in First Pass: Could not locate a " <> show htype <> " handler for " <> show ty
+                Just handlerTerm -> do
+                    let fnTy = Comp0 $ ty :--:> ReturnT ty
+                        synthNode = syntheticLamNode (UniqueError . forgetExtendedId $ errId) fnTy
+                    fnId <- case htype of
+                        Proj -> projectionId
+                        Embed -> embeddingId
+                    modify' $ \(RepPolyHandlers m) ->
+                        RepPolyHandlers $ M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) m
+                    eInsert fnId synthNode
