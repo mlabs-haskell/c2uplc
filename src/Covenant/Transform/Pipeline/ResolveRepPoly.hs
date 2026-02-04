@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE StrictData #-}
 
 module Covenant.Transform.Pipeline.ResolveRepPoly where
@@ -9,7 +10,7 @@ import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Vector qualified as Vector
 
-import Control.Monad.RWS.Strict (RWS, asks, local)
+import Control.Monad.RWS.Strict (MonadReader (..), MonadState (get), RWS, asks, gets, local)
 
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
@@ -29,7 +30,7 @@ import Covenant.Type (
 import Control.Monad (unless, when)
 import Control.Monad.Reader (runReader)
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
-import Covenant.Index (Index)
+import Covenant.Index (Index, ix0, ix1)
 import Covenant.Test (ValNodeInfo (AppInternal))
 import Data.Foldable (
     traverse_,
@@ -42,20 +43,25 @@ import Covenant.Transform.Common
 import Data.Row.Records (Rec)
 import Data.Row.Records qualified as R
 
+import Covenant.CodeGen.Stubs (HandlerType (..), MonadStub, resolveStub, trySelectHandler)
 import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Monad
 import Covenant.Transform.TyUtils
+import Data.Kind (Type)
+import Debug.Trace (traceM)
 
 {- By this point the entire asg is nothing but lam, app, thunk/force, and builtins/primitives
-
-i need some kind of example
-
-f :: Int -> Bool -> String -> ByteString
-f i b s = (g i) (g b) (g (g s))
 -}
-resolveRepPoly :: RWS (Rec ConcretifyCxt) () ExtendedASG ()
+resolveRepPoly ::
+    forall (m :: Type -> Type).
+    ( MonadStub m
+    , MonadReader (Rec ConcretifyCxt) m
+    , MonadState RepPolyHandlers m
+    ) =>
+    m ()
 resolveRepPoly = eTopLevelSrcNode >>= go . fst
   where
-    traceError :: forall a. String -> RWS (Rec ConcretifyCxt) () ExtendedASG a
+    traceError :: forall a. String -> m a
     traceError msg = do
         callPath <- asks (R..! #callPath)
         appPath <- asks (R..! #appPath)
@@ -73,18 +79,18 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                     <> "\n\n"
         error errMsg
 
-    unsafeFnTy :: forall k. (ExtendedKey k, Show k) => k -> RWS (Rec ConcretifyCxt) () ExtendedASG (CompT AbstractTy)
+    unsafeFnTy :: forall k. (ExtendedKey k, Show k) => k -> m (CompT AbstractTy)
     unsafeFnTy k =
         getASG >>= \asg -> case eSafeNodeAt k asg of
             Just (ACompNode compT _) -> pure compT
             other -> traceError $ "unsafeFnTy called on " <> show other <> " which isn't a comp node"
 
-    goRef :: Ref -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    goRef :: Ref -> m ()
     goRef = \case
         AnId i -> resolveExtended i >>= go
         AnArg{} -> pure ()
 
-    dbBindingSite :: DeBruijn -> RWS (Rec ConcretifyCxt) () ExtendedASG LambdaId
+    dbBindingSite :: DeBruijn -> m LambdaId
     dbBindingSite db = do
         let dbInt = review asInt db
         scopeStack <- asks (R..! #callPath)
@@ -96,7 +102,7 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
          3. Updates the type of the corresponding synthetic function (i.e. modifies the node) to
             explicitly mention the handlers (NOTE: THIS DOES NOT CONCRETIFY THE SYNTHETIC FUNCTION NODE)
     -}
-    cleanupAppNode :: ExtendedId -> ASGNode -> Map (Index "tyvar") (ValT Void) -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    cleanupAppNode :: ExtendedId -> ASGNode -> Map (Index "tyvar") (ValT Void) -> m ()
     cleanupAppNode appId (AValNode rTy (App fn args instTys cFunTy)) concretifications = do
         -- The definitive test for whether this needs cleaned up is the presence of the fn Id in the
         -- collection of type fixers
@@ -107,6 +113,51 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 -- projection or embedding handlers to app nodes which result from
                 -- our type fixer -> app node transform.
                 pure ()
+            Just (BuiltinTyFixer compTy biFnData) -> case biFnData of
+                -- TODO: I'm in a rush so I'm not updating the types of the nodes for these builtin type fixers.
+                --       (Except for `Nil` where we actually need it). That should be OK, I think? Nothing after this should
+                --       care about the types as far as I can remember.
+                -- The only thing we have to do for Nil is make sure that the concrete fn type is
+                -- correct after the nullary application. That lets us codegen it correctly later on
+                List_Nil -> do
+                    let cNilTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) cFunTy
+                    eInsert appId $ AValNode rTy (AppInternal fn args instTys cNilTy)
+                -- All the annoyance of list is offloaded to nil, we don't have to do anything for cons
+                List_Cons -> pure ()
+                -- All of the intro forms for data are trivial and take no handlers / have no polymorphism
+                Data_I -> pure ()
+                Data_B -> pure ()
+                Data_Constr -> pure ()
+                Data_Map -> pure ()
+                -- mkPair takes two embeddings we have to account for
+                Pair_Pair -> do
+                    datatypes <- asks (R..! #datatypes)
+                    let concreteA = vacuous $ concretifications M.! ix0
+                        concreteB = vacuous $ concretifications M.! ix1
+                    embA <- AnId <$> selectHandlerId datatypes Embed concreteA
+                    embB <- AnId <$> selectHandlerId datatypes Embed concreteB
+                    let newApp = AppInternal fn (args <> [embA, embB]) instTys cFunTy
+                    eInsert appId $ AValNode rTy newApp
+                -- I THINK we don't need to do anything here?
+                Map_Map -> pure ()
+                -- no projections or embeddings for any of the catas I think?
+                Integer_Nat_Cata -> pure ()
+                Integer_Neg_Cata -> pure ()
+                ByteString_Cata -> pure ()
+                List_Cata -> pure ()
+                -- list match takes no proj/emb
+                List_Match -> pure ()
+                -- matching on pairs requires projections
+                Pair_Match -> do
+                    datatypes <- asks (R..! #datatypes)
+                    let concreteA = vacuous $ concretifications M.! ix0
+                        concreteB = vacuous $ concretifications M.! ix1
+                    projA <- AnId <$> selectHandlerId datatypes Proj concreteA
+                    projB <- AnId <$> selectHandlerId datatypes Proj concreteB
+                    let newApp = AppInternal fn (args <> [projA, projB]) instTys cFunTy
+                    eInsert appId $ AValNode rTy newApp
+                Map_Match -> pure ()
+                Data_Match -> pure ()
             Just (TyFixerFnData _ SOP _ _ _ _ _) -> pure ()
             Just (TyFixerFnData tn enc _polyTyNoHandlers _compiled schema _nm kind) -> do
                 -- we need to extract the "function type with handlers added" from the schema, which in this branch has to be a data schema
@@ -130,8 +181,6 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 -- NOTE/IMPORTANT: Technically we are using computation types in a value type place here but that *shouldn't* matter.
                 --                 If I'm wrong we need to insert some additional nodes to thunk the dummy handlers and then force them, but
                 --                 since this is the last step before codegen we should be fine to not do that.
-                projEmbedHandlers <- asks (R..! #builtinHandlers)
-                identityFn <- forgetExtendedId <$> asks (R..! #identityFn)
                 extraProjEmbArgs <- Vector.forM handlerIndices $ \hIndx ->
                     case M.lookup hIndx concretifications of
                         Nothing ->
@@ -142,13 +191,22 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                                     <> show tn
                                     <> " "
                                     <> show kind
-                        Just (BuiltinFlat bi) -> case M.lookup bi projEmbedHandlers of
-                            Nothing -> pure $ AnId identityFn
-                            Just repPolyHandler -> case kind of
-                                MatchNode -> pure . AnId $ project repPolyHandler
-                                CataNode -> pure . AnId $ project repPolyHandler
-                                IntroNode -> pure . AnId $ embed repPolyHandler
-                        _ -> pure $ AnId identityFn
+                        Just varTyConcrete -> do
+                            datatypes <- asks (R..! #datatypes)
+                            let htype = case kind of
+                                    CataNode -> Proj
+                                    MatchNode -> Proj
+                                    IntroNode -> Embed
+                            res <- AnId <$> selectHandlerId datatypes htype (vacuous varTyConcrete)
+                            traceM $
+                                "node cleanup: index = "
+                                    <> show hIndx
+                                    <> ", htype = "
+                                    <> show htype
+                                    <> ", result = "
+                                    <> show res
+                            pure res
+
                 -- We don't actually *have* to fix the concretified type annotation in the app node, but
                 -- it doesn't really hurt if we do and might save us during debugging
                 let newConcreteFunTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) polyWithHandlers
@@ -159,14 +217,14 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 eInsert appId newNode
     cleanupAppNode _ node _ = traceError $ "Passed something that wasn't an app node to cleanupAppNode: " <> show node
 
-    coerceCompNodeTy :: Id -> CompT AbstractTy -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    coerceCompNodeTy :: Id -> CompT AbstractTy -> m ()
     coerceCompNodeTy i compT = do
         eid <- resolveExtended i
         eNodeAt eid >>= \case
             ACompNode _compT node -> eInsert eid (ACompNode compT node)
             _ -> pure ()
 
-    resolveRigid :: AbstractTy -> RWS (Rec ConcretifyCxt) () ExtendedASG (AbstractTy, ValT Void)
+    resolveRigid :: AbstractTy -> m (AbstractTy, ValT Void)
     resolveRigid rgd@(BoundAt db i) = do
         bindingLam <- dbBindingSite db
         context <- asks (R..! #context)
@@ -176,7 +234,7 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 Nothing -> traceError $ "Could not resolve rigid " <> show rgd <> ", no type found in context"
                 Just res -> pure (rgd, res)
       where
-        findClosestAppWithFn :: LambdaId -> RWS (Rec ConcretifyCxt) () ExtendedASG (Maybe AppId)
+        findClosestAppWithFn :: LambdaId -> m (Maybe AppId)
         findClosestAppWithFn lid = do
             appPath <- asks (R..! #appPath)
             appsWithNodes <- traverse (\x@(AppId i') -> (x,) <$> eNodeAt i') appPath
@@ -185,7 +243,7 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                     _ -> False
             pure $ fst <$> Vector.find (matchesLam . snd) appsWithNodes
 
-    go :: ExtendedId -> RWS (Rec ConcretifyCxt) () ExtendedASG ()
+    go :: ExtendedId -> m ()
     go eid =
         eNodeAt eid >>= \case
             AnError -> pure ()

@@ -31,50 +31,44 @@ import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.ElimTyFixers (transformTypeFixerNodes)
 import Covenant.Transform.Pipeline.FirstPass (firstPass)
 import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)
+import Covenant.Transform.Pipeline.Monad (CodeGen, Datatypes (Datatypes), initRepPolyHandlers, runPass, runPassNoErrors)
 import Covenant.Transform.Pipeline.ResolveRepPoly (resolveRepPoly)
 import Covenant.Type
+import Debug.Trace
 
-transformASG :: CompilationUnit -> Rec PipelineData
-transformASG (CompilationUnit datatypes asg _) = flip evalState extended $ do
-    let dtDict = unsafeMkDatatypeInfos (Vector.toList datatypes)
-    firstPassMeta <- firstPass
-    let builtinHandlers = firstPassMeta R..! #builtinHandlers
-    tyFixerData <- mkTypeFixerFnData dtDict builtinHandlers
+transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
+transformASG dtDict = do
+    (tyFixerData, repPolyHandlers) <- runPassNoErrors dtDict initRepPolyHandlers $ do
+        firstPass
+        mkTypeFixerFnData
     toTransform <- getASG
     let transformState :: Rec TransformState
         transformState =
-            firstPassMeta
-                .+ #asg .== toTransform
-                .+ #dtDict .== dtDict
-                .+ #visited .== S.empty
+            #visited .== S.empty
                 .+ #tyFixerData .== tyFixerData
                 .+ #tyFixers .== M.empty
 
-    asgBundle1 <- snd <$> unliftMetaM transformState transformTypeFixerNodes
+    asgBundle1 <- snd <$> runPassNoErrors dtDict transformState transformTypeFixerNodes
     let initConcretifyCxt :: Rec ConcretifyCxt
         initConcretifyCxt =
             #context .== M.empty
                 .+ #callPath .== Vector.empty
                 .+ #appPath .== Vector.empty
                 .+ #tyFixers .== (asgBundle1 R..! #tyFixers)
-                .+ #builtinHandlers .== (firstPassMeta R..! #builtinHandlers)
-                .+ #identityFn .== (firstPassMeta R..! #identityFn)
-                .+ #uniqueError .== (firstPassMeta R..! #uniqueError)
-    transformedASG <- getASG
-    let (_, almostFinalASG, _) = runRWS resolveRepPoly initConcretifyCxt transformedASG
-    putASG almostFinalASG
-    stubs <- mkStubs firstPassMeta
+                .+ #datatypes .== dtDict
+    finalRepHandlers <- snd <$> runPassNoErrors initConcretifyCxt repPolyHandlers resolveRepPoly
+    traceM $ "final rep handlers:\n" <> show finalRepHandlers <> "\n"
     finalASG <- getASG
-    let pipelineData =
-            R.update #asg finalASG asgBundle1
-                .+ #handlerStubs .== stubs
-    pure pipelineData
-  where
-    extended :: ExtendedASG
-    extended = wrapASG asg
+    let codeGenData =
+            #tyFixerData .== tyFixerData
+                .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
+                .+ #repPolyHandlers .== finalRepHandlers
+    pure codeGenData
 
+{-
 -- This actually inserts bodies into our identity fn / projection embed handlers
 -- and removes the placeholder error node
+-- NOTE: I don't *think* we need this anymore?
 mkStubs :: forall m. (MonadASG m) => Rec FirstPassMeta -> m (Map Id PlutusTerm)
 mkStubs firstPassData = do
     -- removeEphemeralError (firstPassData R..! #uniqueError)
@@ -97,3 +91,4 @@ mkStubs firstPassData = do
     cleanupIdentity (forgetExtendedId -> i) acc = do
         term <- pFreshLam pure
         pure $ M.insert i term acc
+-}

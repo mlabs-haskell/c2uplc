@@ -6,7 +6,13 @@ module Covenant.Transform.Pipeline.MkTyFixerFnData where
 import Covenant.Type (
     AbstractTy,
     BuiltinFlatT,
+    CompT (Comp0, Comp1),
+    CompTBody (ReturnT, (:--:>)),
     TyName,
+    ValT (..),
+    byteStringT,
+    integerT,
+    tyvar,
  )
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -16,7 +22,9 @@ import Covenant.Data (DatatypeInfo)
 import Control.Monad (foldM)
 import Control.Monad.RWS.Strict (MonadReader (ask), MonadState)
 import Covenant.CodeGen.Stubs (MonadStub)
+import Covenant.DeBruijn (DeBruijn (..))
 import Covenant.ExtendedASG
+import Covenant.Index
 import Covenant.Transform.Cata
 import Covenant.Transform.Common
 import Covenant.Transform.Elim
@@ -24,6 +32,7 @@ import Covenant.Transform.Intro
 import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes), RepPolyHandlers)
 
+-- We put #Natural / #Negative / ByteString catas in here.
 mkTypeFixerFnData ::
     forall m.
     (MonadStub m, MonadReader Datatypes m, MonadState RepPolyHandlers m) =>
@@ -31,7 +40,7 @@ mkTypeFixerFnData ::
 mkTypeFixerFnData = do
     (Datatypes datatypes) <- ask
     let allTyNames = M.keys datatypes
-    foldM go M.empty allTyNames
+    (specialTyFixers <>) <$> foldM go M.empty allTyNames
   where
     go :: Map TyName TyFixerDataBundle -> TyName -> m (Map TyName TyFixerDataBundle)
     go acc tn = do
@@ -44,3 +53,38 @@ mkTypeFixerFnData = do
                 cataDat <- mkCatamorphism tn
                 let thisBundle = TyFixerDataBundle constructorData destructorData cataDat
                 pure $ M.insert tn thisBundle acc
+
+specialTyFixers :: Map TyName TyFixerDataBundle
+specialTyFixers =
+    M.fromList
+        [ ("ByteString", bsBundle)
+        , ("#Natural", naturalBundle)
+        , ("#Negative", negativeBundle)
+        ]
+  where
+    bsBundle :: TyFixerDataBundle
+    bsBundle = TyFixerDataBundle mempty Nothing (Just $ BuiltinTyFixer cataBsTy ByteString_Cata)
+      where
+        -- forall r. ByteString -> r -> (Int -> r -> r) -> r
+        cataBsTy :: CompT AbstractTy
+        cataBsTy =
+            Comp1 $
+                byteStringT
+                    :--:> tyvar Z ix0
+                    :--:> ThunkT (Comp0 $ integerT :--:> tyvar (S Z) ix0 :--:> ReturnT (tyvar (S Z) ix0))
+                    :--:> ReturnT (tyvar Z ix0)
+
+    -- forall r. Integer -> r -> (r -> r) -> r
+    cataIntTy :: CompT AbstractTy
+    cataIntTy =
+        Comp1 $
+            integerT
+                :--:> tyvar Z ix0
+                :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT (tyvar (S Z) ix0))
+                :--:> ReturnT (tyvar Z ix0)
+
+    naturalBundle :: TyFixerDataBundle
+    naturalBundle = TyFixerDataBundle mempty Nothing (Just $ BuiltinTyFixer cataIntTy Integer_Nat_Cata)
+
+    negativeBundle :: TyFixerDataBundle
+    negativeBundle = TyFixerDataBundle mempty Nothing (Just $ BuiltinTyFixer cataIntTy Integer_Neg_Cata)

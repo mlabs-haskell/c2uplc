@@ -28,6 +28,7 @@ import Covenant.Type (
         ProductListData
     ),
     TyName,
+    ValT,
  )
 
 -- N.B. *WE* have two different things called `ConstrData`
@@ -77,17 +78,21 @@ import Covenant.MockPlutus (
     pVar,
     plutus_ConstrData,
     prettyPTerm,
+    (#),
  )
 
 import Covenant.ArgDict ()
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.State (State, execState, runState)
-import Covenant.ExtendedASG (ExtendedASG, ExtendedId (..), extendedNodes, forgetExtendedId, unExtendedASG)
+import Covenant.CodeGen.Stubs (StubError, mkNil, resolveStub)
+import Covenant.ExtendedASG (ExtendedASG, ExtendedId (..), MonadASG (getASG), extendedNodes, forgetExtendedId, unExtendedASG)
 import Covenant.JSON (CompilationUnit)
+import Covenant.Prim (OneArgFunc (..), TwoArgFunc (..))
 import Covenant.Transform (transformASG)
-import Covenant.Transform.Common (TyFixerFnData (TyFixerFnData))
-import Covenant.Transform.Pipeline.Common (PipelineData, TransformState)
+import Covenant.Transform.Common (BuiltinFnData (..), TyFixerFnData (BuiltinTyFixer, TyFixerFnData), pFreshLam, pFreshLam', pFreshLam2)
+import Covenant.Transform.Pipeline.Common (CodeGenData, TransformState)
+import Covenant.Transform.Pipeline.Monad (CodeGen, PassM, RepPolyHandlers (RepPolyHandlers), runPass)
 import Covenant.Transform.TyUtils (LambdaId (LambdaId), idToName)
 import Data.Bifunctor (Bifunctor (first, second))
 import Data.Maybe (isJust)
@@ -121,10 +126,11 @@ newtype CodeGenContext
     = CodeGenContext
     { getContext ::
         Rec
-            ( "termScope" .== Map Id Name
+            ( "termScope" .== Map Id PlutusTerm
                 .+ "argScope" .== Map LambdaId (Vector Name)
                 .+ "lamScope" .== Vector LambdaId
                 .+ "asg" .== Map Id ASGNode
+                .+ "tyFixers" .== Map Id TyFixerFnData
             )
     }
 
@@ -136,6 +142,8 @@ data CodeGenError
     | ConstructorNotInDatatype TyName ConstructorName
     | InvalidOpaqueEncoding Text
     | ArgResolutionFail ArgResolutionFailReason
+    | WrapStubError StubError
+    | InvalidNilTy (ValT AbstractTy)
     deriving stock (Show, Eq)
 
 data ArgResolutionFailReason
@@ -160,19 +168,14 @@ data ArgResolutionFailReason
       LamIdPointsAtContext Id
     deriving stock (Show, Eq)
 
-newtype CodeGenM a = CodeGenM (ExceptT CodeGenError (RWS CodeGenContext () Int) a)
-    deriving
-        ( Functor
-        , Applicative
-        , Monad
-        , MonadReader CodeGenContext
-        , MonadState Int
-        , MonadError CodeGenError
-        )
-        via (ExceptT CodeGenError (RWS CodeGenContext () Int))
+-- TODO rewrite all the sigs to use constraints, no time now
+type CodeGenM a = PassM CodeGenError CodeGenContext Int a
 
-runCodeGenM :: forall a. Map Id ASGNode -> Map Id Name -> CodeGenM a -> Either CodeGenError a
-runCodeGenM m termScope (CodeGenM act) = fst $ evalRWS (runExceptT act) cxt 0
+runCodeGenM :: forall a. Map Id TyFixerFnData -> Map Id ASGNode -> Map Id PlutusTerm -> CodeGenM a -> CodeGen (Either CodeGenError a)
+runCodeGenM fixers m termScope act =
+    runPass cxt 0 act >>= \case
+        Left err -> pure $ Left err
+        Right (a, s) -> pure $ Right a
   where
     cxt =
         CodeGenContext $
@@ -180,6 +183,7 @@ runCodeGenM m termScope (CodeGenM act) = fst $ evalRWS (runExceptT act) cxt 0
                 .+ #argScope .== mempty
                 .+ #lamScope .== mempty
                 .+ #asg .== m
+                .+ #tyFixers .== fixers
 
 getNode :: Id -> CodeGenM (Maybe ASGNode)
 getNode i = do
@@ -196,12 +200,17 @@ getLamScope = do
     CodeGenContext r <- ask
     pure $ r R..! #lamScope
 
-getTermScope :: CodeGenM (Map Id Name)
+getTermScope :: CodeGenM (Map Id PlutusTerm)
 getTermScope = do
     CodeGenContext r <- ask
     pure $ r R..! #termScope
 
-lookupVar :: Id -> CodeGenM (Maybe Name)
+getTyFixers :: CodeGenM (Map Id TyFixerFnData)
+getTyFixers = do
+    CodeGenContext r <- ask
+    pure $ r R..! #tyFixers
+
+lookupVar :: Id -> CodeGenM (Maybe PlutusTerm)
 lookupVar i = do
     CodeGenContext r <- ask
     pure $ M.lookup i (r R..! #termScope)
@@ -271,10 +280,10 @@ rModify f l r = R.update l new r
     new = f (r R..! l)
 
 runTopDownCompile ::
-    Rec PipelineData ->
-    ExtendedASG ->
-    Either CodeGenError PlutusTerm
-runTopDownCompile plData eAsg = do
+    Rec CodeGenData ->
+    CodeGen (Either CodeGenError PlutusTerm)
+runTopDownCompile plData = do
+    eAsg <- getASG
     let emptyPrepSt = #onlySrcNodes .== mempty .+ #initTermScope .== mempty .+ #bind .== mempty
         prepRec = execState (prepare plData eAsg) emptyPrepSt
         nodes = prepRec R..! #onlySrcNodes
@@ -282,7 +291,7 @@ runTopDownCompile plData eAsg = do
         termScope = prepRec R..! #initTermScope
 
         doBinds = foldr (\(nm, term) acc -> pLet nm term . acc) id (prepRec R..! #bind)
-    doBinds <$> runCodeGenM nodes termScope (compileTopDown topId)
+    fmap doBinds <$> runCodeGenM (plData R..! #tyFixers) nodes termScope (compileTopDown topId)
 
 prettyMap :: (Show k, Show v) => Map k v -> String
 prettyMap = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"
@@ -292,12 +301,12 @@ prettyMap = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> ac
 --        type fixer functions, or they'll be out of scope if we need to embed or project
 --        constructors paramaterized by constant Integers or ByteStrings
 prepare ::
-    Rec PipelineData ->
+    Rec CodeGenData ->
     ExtendedASG ->
     State
         ( Rec
             ( "onlySrcNodes" .== Map Id ASGNode
-                .+ "initTermScope" .== Map Id Name
+                .+ "initTermScope" .== Map Id PlutusTerm
                 .+ "bind" .== [(Name, PlutusTerm)]
             )
         )
@@ -318,34 +327,35 @@ prepare plData eAsg = do
         _ -> False
 
     tyFixers = plData R..! #tyFixers
-    stubs = plData R..! #handlerStubs
+    RepPolyHandlers byId byTy = plData R..! #repPolyHandlers
 
     go i = case M.lookup i tyFixers of
         Just (TyFixerFnData _ _ _ thisTermCompiled _ nm _) -> do
             let UnsafeMkId iInner = i
                 fnNm = Name nm (Unique (fromIntegral iInner))
-            modify $ rModify (M.insert i fnNm) #initTermScope
+            modify $ rModify (M.insert i (pVar fnNm)) #initTermScope
             modify $ rModify ((fnNm, thisTermCompiled) :) #bind
-        Nothing -> case M.lookup i stubs of
-            Just stub -> do
-                let iName = idToName i
-                modify $ rModify (M.insert i iName) #initTermScope
-                modify $ rModify ((iName, stub) :) #bind
+        _ -> case M.lookup i byId of
+            Just (stub, _, _) -> do
+                modify $ rModify (M.insert i stub) #initTermScope
+            -- we shouldn't need to bind any stubs here, the monad should take
+            -- care of that for us. Not sure if we even need them in the term scope?
             Nothing -> pure ()
 
-nodeOrVar :: Id -> CodeGenM (Either Name ASGNode)
+nodeOrVar :: Id -> CodeGenM (Either PlutusTerm ASGNode)
 nodeOrVar i =
     lookupVar i >>= \case
         Just aVar -> pure $ Left aVar
         Nothing ->
             getNode i >>= \case
                 Just aNode -> pure $ Right aNode
-                Nothing -> error $ "No node or synthetic var info for: " <> show i
+                Nothing -> do
+                    error $ "No node or synthetic var info for: " <> show i
 
 compileTopDown :: Id -> CodeGenM PlutusTerm
 compileTopDown nodeId =
     nodeOrVar nodeId >>= \case
-        Left nm -> pure $ pVar nm
+        Left nm -> pure nm
         Right aNode -> case aNode of
             ACompNode compTy compNodeInfo -> case compNodeInfo of
                 Builtin1 bi1 -> pure $ pBuiltin bi1
@@ -358,10 +368,23 @@ compileTopDown nodeId =
                     withLocalBinds toBind $ compileRef r
             AValNode valTy valNodeInfo -> case valNodeInfo of
                 Lit aConstant -> litToTerm aConstant
-                App fnId argRefs _ _ -> do
-                    fn <- compileTopDown fnId
-                    args <- traverse compileRef argRefs
-                    pure $ foldl' pApp fn args
+                App fnId argRefs _ fnTy -> do
+                    tyFixers <- getTyFixers
+                    -- special handling for Nil -_-
+                    case M.lookup fnId tyFixers of
+                        Just (BuiltinTyFixer _ List_Nil) -> do
+                            let CompN _ (ArgsAndResult _ listTy) = fnTy
+                            mkNil mempty listTy >>= \case
+                                Nothing -> throwError $ InvalidNilTy listTy
+                                Just myNil -> pure myNil
+                        Just (BuiltinTyFixer _ biTyFixer) -> do
+                            biFixer <- compileBIFixer biTyFixer
+                            args <- traverse compileRef argRefs
+                            pure $ foldl' pApp biFixer args
+                        _other -> do
+                            fn <- compileTopDown fnId
+                            args <- traverse compileRef argRefs
+                            pure $ foldl' pApp fn args
                 Thunk childId -> pDelay <$> compileTopDown childId
                 other -> error $ "value nodes should all be lits apps or thunks but got: " <> show other
   where
@@ -369,6 +392,26 @@ compileTopDown nodeId =
     compileRef r = case r of
         AnId i -> compileTopDown i
         AnArg arg -> pVar <$> resolveArg arg
+
+    -- we can't do Nil w/ just this information so we catch it above
+    compileBIFixer :: BuiltinFnData -> CodeGenM PlutusTerm
+    compileBIFixer = \case
+        List_Cons -> pure $ pBuiltin MkCons
+        List_Nil -> error "Unapplied Empty List Constructor"
+        Data_I -> pure $ pBuiltin IData
+        Data_B -> pure $ pBuiltin BData
+        Data_List -> pure $ pBuiltin ListData
+        Data_Constr -> pure $ pBuiltin ConstrData
+        Pair_Pair -> resolveStub "Pair"
+        Map_Map -> resolveStub "id"
+        Integer_Nat_Cata -> resolveStub "cataNat"
+        Integer_Neg_Cata -> resolveStub "cataNeg"
+        List_Cata -> resolveStub "cataList"
+        ByteString_Cata -> resolveStub "cataByteString"
+        List_Match -> resolveStub "matchList"
+        Pair_Match -> resolveStub "matchPair"
+        Map_Match -> pFreshLam2 $ \xs f -> pure $ f # xs
+        Data_Match -> resolveStub "matchData"
 
     withLocalBinds :: Map Id ASGNode -> CodeGenM PlutusTerm -> CodeGenM PlutusTerm
     withLocalBinds toBind = letMany (M.keys toBind)
@@ -383,7 +426,7 @@ compileTopDown nodeId =
           where
             doBind :: Id -> Name -> CodeGenContext -> CodeGenContext
             doBind thisId thisName (CodeGenContext r) =
-                CodeGenContext $ rModify (M.insert thisId thisName) #termScope r
+                CodeGenContext $ rModify (M.insert thisId (pVar thisName)) #termScope r
 
 litToTerm :: AConstant -> CodeGenM PlutusTerm
 litToTerm = \case

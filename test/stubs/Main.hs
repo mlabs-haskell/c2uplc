@@ -40,6 +40,8 @@ import Algebra.Graph.AdjacencyMap.Algorithm
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
 import Control.Monad.State.Strict (MonadState (get, put), MonadTrans (lift), StateT (runStateT), modify')
 import Covenant.ArgDict
+import Covenant.CodeGen (evalTerm)
+import Covenant.CodeGen.Stubs
 import Covenant.Data (DatatypeInfo)
 import Covenant.MockPlutus
 import Covenant.Prim (OneArgFunc (IData, ListData, UnIData, UnListData))
@@ -55,12 +57,9 @@ import PlutusCore.Data (Data (Constr, I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
-import Covenant.CodeGen.Stubs 
-import Covenant.CodeGen (evalTerm)
 
 main :: IO ()
 main = error "TODO SETUP STUB TESTS (everything was checked in a repl so OK for right now)"
-
 
 {-
   *************
@@ -136,46 +135,46 @@ recListTest = do
     recList' <- resolveStub "recList"
     pure $ recList' # fCons # fNil # depth1Ints
 
-testEmbTrue :: PlutusTerm
-testEmbTrue = runWithEmptyASG $ do
-    emb <- embedBool
+testEmbTrue :: (MonadASG m) => StubM m PlutusTerm
+testEmbTrue = do
+    emb <- resolveStub "embedBool"
     pure $ emb # mkConstant () True
 
 -- Round trips
-testProjTrue :: PlutusTerm
-testProjTrue = runWithEmptyASG $ do
-    emb <- embedBool
+testProjTrue :: (MonadASG m) => StubM m PlutusTerm
+testProjTrue = do
+    emb <- resolveStub "embedBool"
     let embedded = emb # mkConstant () True
-    proj <- projBool
+    proj <- resolveStub "projBool"
     pure $ proj # embedded
 
-testEmbFalse :: PlutusTerm
-testEmbFalse = runWithEmptyASG $ do
-    emb <- embedBool
+testEmbFalse :: (MonadASG m) => StubM m PlutusTerm
+testEmbFalse = do
+    emb <- resolveStub "embedBool"
     pure $ emb # mkConstant () False
 
 -- Round trips
-testProjFalse :: PlutusTerm
-testProjFalse = runWithEmptyASG $ do
-    emb <- embedBool
+testProjFalse :: (MonadASG m) => StubM m PlutusTerm
+testProjFalse = do
+    emb <- resolveStub "embedBool"
     let embedded = emb # mkConstant () False
-    proj <- projBool
+    proj <- resolveStub "projBool"
     pure $ proj # embedded
 
-runTest :: (forall m. MonadASG m => StubM m PlutusTerm) -> IO ()
+runTest :: (forall m. (MonadASG m) => StubM m PlutusTerm) -> IO ()
 runTest stub' = case compileStub' stub of
-  Left stubErr -> putStrLn (show stubErr)
-  Right hm -> do
-    putStrLn "Stub compilation success. Pretty unevaluated term:"
-    putStrLn ""
-    print $ prettyPTerm hm
-    putStrLn ""
-    putStrLn "Trying evaluation..."
-    case evalTerm hm of
-      Left evalErr -> putStrLn evalErr
-      Right res -> do
-        putStrLn "Success! Evaluation result: "
-        print (prettyPTerm res)
- where
-   stub :: forall m. MonadASG m => StubM m PlutusTerm
-   stub = defStubs >> stub'
+    Left stubErr -> putStrLn (show stubErr)
+    Right hm -> do
+        putStrLn "Stub compilation success. Pretty unevaluated term:"
+        putStrLn ""
+        print $ prettyPTerm hm
+        putStrLn ""
+        putStrLn "Trying evaluation..."
+        case evalTerm hm of
+            Left evalErr -> putStrLn evalErr
+            Right res -> do
+                putStrLn "Success! Evaluation result: "
+                print (prettyPTerm res)
+  where
+    stub :: forall m. (MonadASG m) => StubM m PlutusTerm
+    stub = defStubs >> stub'

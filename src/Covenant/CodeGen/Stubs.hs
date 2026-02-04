@@ -37,6 +37,7 @@ import Data.Row.Records (Rec, (.+), (.==))
 import Algebra.Graph.AdjacencyMap
 import Algebra.Graph.AdjacencyMap.Algorithm
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
+import Control.Monad.RWS.Strict (RWST)
 import Control.Monad.State.Strict (MonadState (get, put), MonadTrans (lift), StateT (runStateT), modify')
 import Covenant.ArgDict
 import Covenant.Data (DatatypeInfo)
@@ -83,6 +84,7 @@ import UntypedPlutusCore.Evaluation.Machine.SteppableCek.DebugDriver (mkCekTrans
 
 defStubs :: forall m. (MonadStub m) => m ()
 defStubs = do
+    _error
     -- identity fn
     _id
     -- Fix
@@ -186,18 +188,19 @@ _cataByteString = declare "cataByteString" $ do
                     whenEmpty
                     ( whenNonEmpty
                         # (originalBS #! ix)
-                        # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #- i 1))
+                        # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #+ i 1))
                     )
 
 --
 _cataList :: forall m. (MonadASG m) => StubM m ()
 _cataList = declare "cataList" $ do
     fix <- resolveStub "fix"
-    body <- go
+    elim <- resolveStub "elimList"
+    body <- pFreshLam $ \self ->
+        pFreshLam3 $ \xs f z -> do
+            goCons <- pFreshLam2 $ \y ys -> pure $ self # (f # y # z) # ys
+            pure $ elim # goCons # z # xs
     pure $ fix # body
-  where
-    go :: StubM m PlutusTerm
-    go = error "Implement left-associative list catamorphism"
 
 {- **************************
    Hard-coded Intro (Constructor) Functions
@@ -241,6 +244,7 @@ _mkPair = declare "Pair" $
 -}
 
 -- this is just elimList with the arg order swapped to conform with the ctor order of our List decl
+-- List a -> r -> (a -> r) -> r
 _matchList :: forall m. (MonadStub m) => m ()
 _matchList = declare "matchList" $ pFreshLam3' "xs" "goNil" "goCons" $ \xs goNil goCons -> do
     elim <- resolveStub "elimList"
@@ -275,7 +279,7 @@ _matchPair = declare "matchPair" $
                 b = pSnd aPair
             pure $ f # (projA # a) # (projB # b)
 
-{- *************************
+{- ************************
    Stub Monad
    ************************
 
@@ -297,17 +301,16 @@ data StubError
     | MissingDeps Text (Set Text)
     | DepCycle (Cycle Text)
     | WitnessFail (ValT AbstractTy)
-    deriving stock (Show)
+    deriving stock (Show, Eq)
 
 newtype StubM m a = StubM (ExceptT StubError (StateT StubContext m) a)
     deriving
         ( Functor
         , Applicative
         , Monad
-        , -- I am intentionally not defining a MonadState instance so it doesn't "clash"
-          -- with other instances. This will live at the bottom of a transformer stack with
-          -- RWS on top. (I suspect a MonadState instance would lead to annoying fundeps inference problems)
-          MonadError StubError
+        -- I am intentionally not defining a MonadState instance so it doesn't "clash"
+        -- with other instances. This will live at the bottom of a transformer stack with
+        -- RWS on top. (I suspect a MonadState instance would lead to annoying fundeps inference problems)
         )
         via (ExceptT StubError (StateT StubContext m))
 
@@ -316,11 +319,25 @@ instance (MonadASG m) => MonadASG (StubM m) where
 
     putASG asg = StubM . lift . lift $ putASG asg
 
+-- Stupid hack needed to support multiple levels of errors. Not very elegant but works...
+-- Isomorphic to Either but I want something that is semantically clearer
+class (Monad m) => HasStubError m where
+    throwStubErr :: forall a. StubError -> m a
+
+instance (Monad m, HasStubError m) => HasStubError (ExceptT e m) where
+    throwStubErr = lift . throwStubErr
+
+instance (Monad m, HasStubError m, Monoid w) => HasStubError (RWST r w s m) where
+    throwStubErr = lift . throwStubErr
+
+instance (Monad m) => HasStubError (StubM m) where
+    throwStubErr = StubM . throwError
+
 -- This is effectively a type class for things that contain a StubM somewhere in the stack
 -- It's inelegant but it's the only thing I can think of on short notice
 -- In theory any valid instance of this has to satisfy a kind of convoluted set of laws
 -- that i am not going to bother trying to explicate here
-class (MonadASG m, MonadError StubError m) => MonadStub m where
+class (MonadASG m, HasStubError m) => MonadStub m where
     -- Must log the name in to the present context
     stubData :: Text -> m (Name, PlutusTerm, Id)
 
@@ -342,7 +359,7 @@ instance (MonadASG m) => MonadStub (StubM m) where
             Just res -> do
                 StubM $ modify' $ \(StubContext _bs _ds acc) -> StubContext _bs _ds (S.insert nm acc)
                 pure res
-            Nothing -> throwError $ NoBinding nm
+            Nothing -> throwStubErr $ NoBinding nm
 
     stubExists :: (Monad m) => Text -> StubM m Bool
     stubExists nm = do
@@ -364,7 +381,7 @@ instance (MonadASG m) => MonadStub (StubM m) where
                 StubM $ put $ StubContext bs' ds' mempty
             else do
                 let notInScope = fst <$> filter (isNothing . snd) resolvedDeps
-                throwError $ MissingDeps nm (S.fromList notInScope)
+                throwStubErr $ MissingDeps nm (S.fromList notInScope)
 
     asTopLevel :: forall a. StubM m a -> StubM m a
     asTopLevel act = do
@@ -396,15 +413,17 @@ resolveStub nmTxt = do
 stubId :: (MonadStub m) => Text -> m Id
 stubId nm = stubData nm >>= \case (_, _, i) -> pure i
 
-runStubM :: forall m a. (MonadASG m) => StubM m a -> m (Either StubError (StubContext, a))
-runStubM (StubM act) =
+runStubM :: forall m a. (MonadASG m) => StubM m () -> StubM m a -> m (Either StubError (StubContext, a))
+runStubM (StubM scope) (StubM act') = do
     (\(e, cxt) -> case e of Left e -> Left e; Right res -> Right (cxt, res))
         <$> runStateT (runExceptT act) (StubContext mempty mempty mempty)
+  where
+    act = scope >> act'
 
 -- this let-binds all of the dependencies after performing dependency analysis. ugh
-compileStubM :: forall m. (MonadASG m) => StubM m PlutusTerm -> m (Either StubError PlutusTerm)
-compileStubM act =
-    runStubM act >>= \case
+compileStubM :: forall m. (MonadASG m) => StubM m () -> StubM m PlutusTerm -> m (Either StubError PlutusTerm)
+compileStubM scope act =
+    runStubM scope act >>= \case
         Left e -> pure (Left e)
         Right (StubContext binds depCs topDeps, inner) -> do
             -- TODO: cycle check?
@@ -439,7 +458,7 @@ compileStub' :: (forall m. (MonadASG m) => StubM m PlutusTerm) -> Either StubErr
 compileStub' act = runWithEmptyASG compiled
   where
     compiled :: forall m. (MonadASG m) => m (Either StubError PlutusTerm)
-    compiled = compileStubM act
+    compiled = compileStubM defStubs act
 
 data HandlerType = Proj | Embed
     deriving stock (Show, Eq, Ord)
@@ -624,7 +643,7 @@ getListProj' w = resolveStub (projListKey w)
 -- | TAKES THE BASE/INNERMOST TYPE, NOT THE FULL LIST TYPE
 getListProj :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m PlutusTerm
 getListProj dict valT = case decideUniType dict valT of
-    Nothing -> throwError $ WitnessFail valT
+    Nothing -> throwStubErr $ WitnessFail valT
     Just (MkUniProof w) -> getListProj' w
 
 {- ***************************

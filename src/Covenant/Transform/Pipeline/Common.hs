@@ -46,26 +46,24 @@ import Data.Vector qualified as Vector
 import Debug.Trace (traceM)
 import GHC.TypeLits (KnownSymbol, Symbol)
 
-type PipelineData =
-    TransformState
-        .+ "handlerStubs" .== Map Id PlutusTerm
+type CodeGenData =
+    "tyFixerData" .== Map TyName TyFixerDataBundle
+        .+ "tyFixers" .== Map Id TyFixerFnData
+        .+ "repPolyHandlers" .== RepPolyHandlers
 
 type ConcretifyCxt =
     "context" .== Map AppId (Map (Index "tyvar") (ValT Void))
         .+ "callPath" .== Vector LambdaId
         .+ "appPath" .== Vector AppId
         .+ "tyFixers" .== Map Id TyFixerFnData
-        .+ "identityFn" .== ExtendedId
-        .+ "uniqueError" .== ExtendedId
+        .+ "datatypes" .== Datatypes
 
 instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
     getASG = get
     putASG = put
 
 type TransformState =
-    "uniqueError" .== ExtendedId
-        .+ "visited" .== Set ExtendedId
-        .+ "dtDict" .== Map TyName (DatatypeInfo AbstractTy)
+    "visited" .== Set ExtendedId
         .+ "tyFixerData" .== Map TyName TyFixerDataBundle
         .+ "tyFixers" .== Map Id TyFixerFnData
 

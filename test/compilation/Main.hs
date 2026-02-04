@@ -24,10 +24,11 @@ import Debug.Trace
 import Optics.Core (view)
 import Prettyprinter
 
+import Covenant.ArgDict (ppASG, simplePrettyASG)
 import Covenant.DeBruijn (DeBruijn (..))
 import Covenant.Index
 import Covenant.MockPlutus (prettyPTerm)
-import Covenant.Test (unsafeMkDatatypeInfos)
+import Covenant.Test (list, unsafeMkDatatypeInfos)
 import Data.Either (isRight)
 import Data.Wedge (Wedge (There))
 import Test.Tasty
@@ -38,7 +39,17 @@ main =
     defaultMain $
         testGroup
             "compilation"
-            [ testCase "simpleCaseCompilesWithoutErrors" simpleCase
+            [ shouldCompile "addTwoNumbers" mempty addTwoNumbers
+            , shouldCompile "mkJust_SOP" [maybeSOP] mkJust
+            , shouldCompile "mkJust_Data" [maybeData] mkJust
+            , shouldCompile "matchMaybeInt_SOP" [maybeSOP] matchOnMaybeInt
+            , shouldCompile "matchMaybeInt_Data" [maybeData] matchOnMaybeInt
+            , shouldCompile "intro_enum" [abcT] introEnum
+            , shouldCompile "elim_enum" [abcT] elimEnum
+            , shouldCompile "intro_product_sop" [productSOP] introProduct
+            , shouldCompile "intro_product_data" [productData] introProduct
+            , shouldCompile "intro_newtype" [myNewtype] introNewtype
+            , shouldCompile "elim_newtype" [myNewtype] elimNewtype
             ]
   where
     simpleCase = assertBool "addTwoNumbers didn't compile" . isRight $ testCompile mempty addTwoNumbers
@@ -52,9 +63,43 @@ testCompileIO ::
     forall a.
     Vector (DataDeclaration AbstractTy) ->
     ASGBuilder a ->
-    IO PlutusTerm
+    IO ()
 testCompileIO dtDict builder = case mkASG dtDict builder of
-    Left asgErr -> undefined
+    Left asgErr -> do
+        print $ "!! ERROR !! ASG Construction Fail: " <> show asgErr
+    Right cu@(CompilationUnit _ asg _) -> do
+        putStrLn "************************"
+        putStrLn "ASG Construction Success"
+        putStrLn "************************"
+        putStrLn (ppASG asg)
+        case compile cu of
+            Left cgErr -> putStrLn $ "!! ERROR !! Code gen failed: " <> show cgErr
+            Right resTerm -> do
+                putStrLn "****************************"
+                putStrLn "Code successfully generated!"
+                putStrLn "*****************************"
+                print (prettyPTerm resTerm)
+                putStrLn ""
+                putStrLn "Attempting evaluation..."
+                putStrLn ""
+                case evalTerm resTerm of
+                    Left err -> putStrLn $ "!! ERROR !! Evaluation failed:\n" <> err
+                    Right res -> do
+                        putStrLn "******************"
+                        putStrLn "Evaluation Success"
+                        putStrLn "******************"
+                        print $ prettyPTerm res
+
+-- also evaluates
+shouldCompile ::
+    forall a.
+    String ->
+    Vector (DataDeclaration AbstractTy) ->
+    ASGBuilder a ->
+    TestTree -- i.e. IO (), why do they do that
+shouldCompile testNm dtDict builder = testCase testNm $ case testCompile dtDict builder of
+    Left err -> assertFailure $ "Compilation failed. Error: " <> err
+    Right _ -> pure ()
 
 testCompile ::
     forall a.
@@ -66,11 +111,11 @@ testCompile dtDict builder = case mkASG dtDict builder of
     Right cu -> case compile cu of
         Left cgErr -> Left $ show (CodeGenFail cgErr)
         Right resTerm -> do
-            traceM $ "\n" <> show (prettyPTerm resTerm) <> "\n"
+            -- traceM $ "\n" <> show (prettyPTerm resTerm) <> "\n"
             case evalTerm resTerm of
                 Left errMsg -> Left errMsg
                 Right evaluated -> do
-                    traceM $ "\nevaluated:\n" <> show (prettyPTerm evaluated)
+                    -- traceM $ "\nevaluated:\n" <> show (prettyPTerm evaluated)
                     pure evaluated
 
 maybeT :: DataEncoding -> DataDeclaration AbstractTy
@@ -211,3 +256,7 @@ mkListLike ty _ nil [] = ctor ty nil [] [There (BuiltinFlat IntegerT)]
 mkListLike ty cons nil (x : xs) = do
     xs' <- AnId <$> mkListLike ty cons nil xs
     ctor' ty cons [AnId x, xs']
+
+mkNilConcrete :: ASGBuilder Id
+mkNilConcrete = testLam (Datatype "List" [integerT]) $ do
+    AnId <$> ctor "List" "Nil" [] [There integerT]

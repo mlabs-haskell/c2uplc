@@ -28,14 +28,14 @@ import Covenant.ASG (
     nodeAt,
     topLevelId,
  )
-import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult), TyName (TyName), ValT (..))
+import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult), ConstructorName (ConstructorName), TyName (TyName), ValT (..))
 
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
 import Covenant.ExtendedASG
 import Covenant.Index (Index, intCount, intIndex)
 import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId))
 
-import Control.Monad.Trans.Reader (ReaderT)
+import Control.Monad.Trans.Reader (ReaderT (runReaderT))
 import Covenant.Constant (AConstant (..))
 import Covenant.Transform.TyUtils
 import Data.Maybe (fromJust)
@@ -107,6 +107,11 @@ prettyCompT (CompN cnt (ArgsAndResult args result)) = mkForall <> "." <+> mkFn
     pRes = "!" <> prettyValT True result
     mkFn = hsep $ punctuate " ->" (pArgs <> [pRes])
 
+ppASG :: Map Id ASGNode -> String
+ppASG m = show $ runReaderT (simplePrettyASG getNode top (m M.! top)) (PrettyContext mempty mempty)
+  where
+    top = fst $ M.findMax m
+    getNode = flip M.lookup m
 simplePrettyASG ::
     forall m ann.
     (Monad m) =>
@@ -137,9 +142,15 @@ simplePrettyASG lookupNode thisId@(UnsafeMkId i) = \case
             prettyFn <- lift (lookupNode fn) >>= simplePrettyASG lookupNode fn
             pargs <- Vector.toList <$> traverse goRef args
             pure $ align . group . encloseSep "" "" " # " $ (prettyFn : pargs)
-        Thunk child -> undefined
+        Thunk child -> do
+            childNode <- lift $ lookupNode child
+            childDoc <- simplePrettyASG lookupNode child childNode
+            pure $ angles childDoc
         Cata ty handlers arg -> matchLike "cata" <$> goRef arg <*> traverse goRef handlers
-        DataConstructor tn cn args -> undefined
+        DataConstructor (TyName tn) (ConstructorName cn) args -> do
+            let fnPart = pretty tn <> "." <> pretty cn
+            pargs <- Vector.toList <$> traverse goRef args
+            pure $ align . group . encloseSep "" "" " # " $ (fnPart : pargs)
         Match scrut handlers -> matchLike "match" <$> goRef scrut <*> traverse goRef handlers
   where
     goRef :: Ref -> ReaderT (PrettyContext ann) m (Doc ann)

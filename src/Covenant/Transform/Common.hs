@@ -8,6 +8,7 @@ module Covenant.Transform.Common (
     TyFixerFnData (..),
     TyFixerNodeKind (..),
     TyFixerDataBundle (..),
+    tyFixerFnTy,
     nextId,
     freshName,
     freshNamePrefix,
@@ -139,6 +140,11 @@ data TyFixerFnData
         }
     | BuiltinTyFixer (CompT AbstractTy) BuiltinFnData
 
+tyFixerFnTy :: TyFixerFnData -> CompT AbstractTy
+tyFixerFnTy = \case
+    TyFixerFnData _ _ ty _ _ _ _ -> ty
+    BuiltinTyFixer ty _ -> ty
+
 -- BuiltinFnData holds the information we need to compile every "compiler primitive" non-atomic datatype.
 -- This is needed in large part because we cannot generate a corresponding Plutus Term for parametric
 -- builtins (mainly List) until we've already completed an analysis that comes after the type fixer transform
@@ -157,8 +163,8 @@ data BuiltinFnData
     | Pair_Pair
     | Map_Map
     | -- Catamorphisms
-      Integer_Nat
-    | Integer_Neg
+      Integer_Nat_Cata
+    | Integer_Neg_Cata
     | List_Cata
     | ByteString_Cata
     | -- Eliminators
@@ -166,6 +172,7 @@ data BuiltinFnData
     | Pair_Match
     | Map_Match
     | Data_Match
+    deriving stock (Show, Eq)
 
 data TyFixerNodeKind = MatchNode | IntroNode | CataNode
     deriving stock (Show, Eq, Ord)

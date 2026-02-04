@@ -9,7 +9,7 @@ import Covenant.ASG (
  )
 import Covenant.Constant (AConstant (ABoolean, AByteString, AString, AUnit, AnInteger))
 import Covenant.Data (DatatypeInfo)
-import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId))
+import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId), unsafeMkDatatypeInfos)
 import Covenant.Type (
     AbstractTy,
     BuiltinFlatT,
@@ -74,11 +74,11 @@ import Covenant.ArgDict ()
 import Covenant.CodeGen.Common
 
 import Control.Monad.Except (runExceptT)
-import Covenant.ExtendedASG (extendedNodes, unExtendedASG)
-import Covenant.JSON (CompilationUnit)
+import Covenant.ExtendedASG (extendedNodes, unExtendedASG, wrapASG)
+import Covenant.JSON (CompilationUnit (CompilationUnit))
 import Covenant.Transform (transformASG)
 import Covenant.Transform.Common (TyFixerFnData (TyFixerFnData))
-import Covenant.Transform.Pipeline.Common (PipelineData, TransformState)
+import Covenant.Transform.Pipeline.Common (CodeGenData, TransformState)
 import Covenant.Transform.TyUtils (idToName)
 import Data.Maybe (isJust)
 import Data.Row.Records (Rec)
@@ -90,6 +90,10 @@ import Prettyprinter
 import UntypedPlutusCore (Unique (Unique))
 
 -- evaluation stuff
+
+import Covenant.CodeGen.Stubs (StubError)
+import Covenant.Transform.Pipeline.Monad (CodeGen, Datatypes (Datatypes), runCodeGen)
+import Data.Bifunctor (Bifunctor (first))
 import PlutusCore qualified as PLC
 import PlutusCore.Evaluation.Machine.ExBudget (
     ExBudget (ExBudget),
@@ -114,17 +118,13 @@ compilePretty = fmap pretty . compile
    See: https://github.com/Plutonomicon/plutarch-plutus/blob/treasury-milestone-3/Plutarch/Internal/Term.hs#L829-L853
 -}
 compile :: CompilationUnit -> Either CodeGenError PlutusTerm
-compile cu = runTopDownCompile pipelineData pipelineASG
+compile cu@(CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runCodeGen (wrapASG asg) $ do
+    cgData <- transformASG datatypes
+    runTopDownCompile cgData >>= \case
+        Left cgErr -> error $ "Compilation error during code generation: " <> show cgErr
+        Right aTerm -> pure aTerm
   where
-    trace1 = "asg:\n" <> show (prettyNodes [] nodes) <> "\n\n"
-    -- trace2 = "argDict:\n" <> show argResDict <> "\n\n"
-    trace3 = "eNodes:\n" <> (show $ extendedNodes pipelineASG) <> "\n\n"
-    datatypes = pipelineData R..! #dtDict
-    -- (CodeGenM act) = generatePLC pipelineData argResDict nodes
-    pipelineData = transformASG cu
-    pipelineASG = pipelineData R..! #asg
-    -- argResDict = preprocess pipelineASG
-    nodes = snd $ unExtendedASG pipelineASG
+    datatypes = Datatypes $ unsafeMkDatatypeInfos (Vector.toList datatypesRaw)
 
     prettyNodes acc [] = vcat $ reverse acc
     prettyNodes acc ((UnsafeMkId i, node) : rest) =

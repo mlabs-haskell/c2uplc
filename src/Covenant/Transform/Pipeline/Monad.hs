@@ -3,7 +3,8 @@ module Covenant.Transform.Pipeline.Monad where
 import Control.Monad.RWS.Strict
 import Control.Monad.State.Strict
 
-import Control.Monad.Except (MonadError)
+import Control.Monad.Except (ExceptT (ExceptT), MonadError (throwError), runExceptT)
+import Control.Monad.Trans.Except (ExceptT)
 import Covenant.CodeGen.Stubs
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG
@@ -12,6 +13,8 @@ import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
 import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as M
+import Data.Void (Void, absurd)
 
 {- I need some kind of unifying abstraction for all the transformation passes here.
 
@@ -69,6 +72,16 @@ instance (Monoid w, MonadStub m) => MonadStub (RWST r w s m) where
 
     _bindStub nm term = lift $ _bindStub nm term
 
+instance (MonadStub m) => MonadStub (ExceptT e m) where
+    stubData = lift . stubData
+
+    stubExists = lift . stubExists
+
+    -- I hope?
+    asTopLevel act = ExceptT $ asTopLevel (runExceptT act)
+
+    _bindStub nm term = lift $ _bindStub nm term
+
 newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
     deriving
         ( Functor
@@ -76,11 +89,14 @@ newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
         , Monad
         , MonadASG
         , MonadStub
-        , MonadError StubError
+        , HasStubError
         )
         via (StubM (State ExtendedASG))
 
-newtype PassM r s a = PassM (RWST r () s CodeGen a)
+runCodeGen :: ExtendedASG -> CodeGen PlutusTerm -> Either StubError PlutusTerm
+runCodeGen e (CodeGen act) = evalState (compileStubM defStubs act) e
+
+newtype PassM e r s a = PassM (ExceptT e (RWST r () s CodeGen) a)
     deriving
         ( Functor
         , Applicative
@@ -89,19 +105,80 @@ newtype PassM r s a = PassM (RWST r () s CodeGen a)
         , MonadStub
         , MonadReader r
         , MonadState s
-        , MonadError StubError
+        , HasStubError
+        , MonadError e
         )
-        via (RWST r () s CodeGen)
+        via (ExceptT e (RWST r () s CodeGen))
 
 runPass ::
+    forall (e :: Type) (r :: Type) (s :: Type) (a :: Type).
+    r ->
+    s ->
+    PassM e r s a ->
+    CodeGen (Either e (a, s))
+runPass r s (PassM act) = do
+    runRWST (runExceptT act) r s >>= \case
+        (res, st, _) -> case res of
+            Left e -> pure $ Left e
+            Right x -> pure $ Right (x, st)
+
+runPassNoErrors ::
     forall (r :: Type) (s :: Type) (a :: Type).
     r ->
     s ->
-    PassM r s a ->
+    PassM Void r s a ->
     CodeGen (a, s)
-runPass r s (PassM act) = do
-    (a, s', _) <- runRWST act r s
-    pure (a, s')
+runPassNoErrors r s act =
+    runPass r s act >>= \case
+        Left err -> absurd err
+        Right res -> pure res
 
-newtype RepPolyHandlers = RepPolyHandlers (Map Id (PlutusTerm, HandlerType, ValT AbstractTy))
+data RepPolyHandlers
+    = RepPolyHandlers
+    { ixedById :: Map Id (PlutusTerm, HandlerType, ValT AbstractTy)
+    , ixedByType :: Map (ValT AbstractTy, HandlerType) Id
+    }
+    deriving stock (Show, Eq)
+
+initRepPolyHandlers = RepPolyHandlers mempty mempty
+
 newtype Datatypes = Datatypes (Map TyName (DatatypeInfo AbstractTy))
+
+{- This is a dumb hack. The pipeline supposes that we, at the very end, make every handler function
+   "explicit" in the ASG. I.e. that projections and embeddings have Ids.
+
+   They don't actually *need* to have Ids, but refactoring the pipeline to account for that would
+   take more time than I have, so this ensures we can always get an `Id` for every
+   proj/embed handler.
+
+   We don't construct synthetic functions here because we should only ever use this at a point where
+   those don't actually matter anymore (after analysis).
+
+   This won't work if we use it on non-concrete types. The only reason we don't work w/ `ValT Void`
+   is that doing so would require more work (and no time).
+-}
+selectHandlerId ::
+    forall m.
+    (MonadStub m, MonadState RepPolyHandlers m) =>
+    Datatypes ->
+    HandlerType ->
+    ValT AbstractTy ->
+    m Id
+selectHandlerId (Datatypes dtDict) htype valT = do
+    (RepPolyHandlers byId byType) <- get
+    case M.lookup (valT, htype) byType of
+        Just i -> pure i
+        Nothing ->
+            trySelectHandler dtDict htype valT >>= \case
+                Nothing -> stubId "id"
+                Just aHandler -> do
+                    eid <- case htype of
+                        Proj -> projectionId
+                        Embed -> embeddingId
+                    let i = forgetExtendedId eid
+                    let updF (RepPolyHandlers byId' byType') =
+                            RepPolyHandlers
+                                (M.insert i (aHandler, htype, valT) byId')
+                                (M.insert (valT, htype) i byType')
+                    modify' updF
+                    pure i

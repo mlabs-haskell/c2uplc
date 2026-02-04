@@ -47,6 +47,7 @@ import Control.Monad.RWS.Strict (MonadReader (ask), modify')
 import Covenant.CodeGen.Stubs
 import Covenant.Transform.Pipeline.Monad
 import Data.Text (Text)
+import Data.Void (Void)
 import UntypedPlutusCore (Name)
 
 {- Mainly what this does is to ensure that all of the "primitive" projection/embedding functions
@@ -58,12 +59,13 @@ import UntypedPlutusCore (Name)
 
 -- The ValT is the type *of the thing being projected* not of the *projection function* or anything like that.
 
-firstPass :: PassM Datatypes RepPolyHandlers ()
+firstPass :: PassM Void Datatypes RepPolyHandlers ()
 firstPass = do
-    uniqueErrorId <- ephemeralErrorId
-    eInsert uniqueErrorId AnError
-    mapM_ (uncurry (bindPrimStub uniqueErrorId)) ((Proj,) <$> primTypes)
-    mapM_ (uncurry (bindPrimStub uniqueErrorId)) ((Embed,) <$> primTypes)
+    uniqueErrorId <- stubId "error"
+    let eid = EphemeralError uniqueErrorId
+    eInsert eid AnError
+    mapM_ (uncurry (bindPrimStub eid)) ((Proj,) <$> primTypes)
+    mapM_ (uncurry (bindPrimStub eid)) ((Embed,) <$> primTypes)
   where
     primTypes :: [ValT AbstractTy]
     primTypes = [intT, boolT, stringT, byteStringT, unitT, blsG1T, blsG2T]
@@ -77,7 +79,7 @@ firstPass = do
     -- Pairs and Map are weird because the types "lie" (the args to Pair are "as if it were data encoded", i.e., they are
     -- Data internally and get projected by *matching on the pair*.)
 
-    bindPrimStub :: ExtendedId -> HandlerType -> ValT AbstractTy -> PassM Datatypes RepPolyHandlers ()
+    bindPrimStub :: ExtendedId -> HandlerType -> ValT AbstractTy -> PassM Void Datatypes RepPolyHandlers ()
     bindPrimStub errId htype ty =
         ask >>= \(Datatypes dtDict) ->
             trySelectHandler dtDict htype ty >>= \case
@@ -88,6 +90,8 @@ firstPass = do
                     fnId <- case htype of
                         Proj -> projectionId
                         Embed -> embeddingId
-                    modify' $ \(RepPolyHandlers m) ->
-                        RepPolyHandlers $ M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) m
+                    modify' $ \(RepPolyHandlers byId byTy) ->
+                        RepPolyHandlers
+                            (M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) byId)
+                            (M.insert (ty, htype) (forgetExtendedId fnId) byTy)
                     eInsert fnId synthNode

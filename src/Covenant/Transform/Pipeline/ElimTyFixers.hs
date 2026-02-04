@@ -18,7 +18,8 @@ import Covenant.ASG (
  )
 import Covenant.Type (
     AbstractTy,
-    CompT,
+    CompT (CompN),
+    CompTBody (ReturnT, (:--:>)),
     Constructor (Constructor),
     ConstructorName (ConstructorName),
     DataDeclaration (DataDeclaration, OpaqueData),
@@ -39,10 +40,10 @@ import Covenant.Transform.Common
 import Data.Row.Records qualified as R
 import Data.Set qualified as Set
 
-import Control.Monad.RWS.Strict (MonadReader)
-import Covenant.CodeGen.Stubs (MonadStub)
+import Control.Monad.RWS.Strict (MonadReader (ask))
+import Covenant.CodeGen.Stubs (MonadStub, stubId)
 import Covenant.Transform.Pipeline.Common
-import Covenant.Transform.Pipeline.Monad (Datatypes)
+import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes))
 import Covenant.Transform.TyUtils
 import Data.Kind (Type)
 import Data.Row.Records (Rec)
@@ -64,12 +65,12 @@ transformTypeFixerNodes = do
   where
     conjureFunction :: CompT AbstractTy -> m ASGNode
     conjureFunction compT = do
-        errId <- forgetExtendedId <$> gets (R..! #uniqueError)
+        errId <- stubId "error"
         pure $ syntheticLamNode (UniqueError errId) compT
 
     resolveCtorIx :: TyName -> ConstructorName -> m (Maybe Int)
     resolveCtorIx tn cn = do
-        dtInfo <- (M.! tn) <$> gets (R..! #dtDict)
+        dtInfo <- (\(Datatypes x) -> x M.! tn) <$> ask
         case view #originalDecl dtInfo of
             OpaqueData _ ctors -> do
                 -- TODO/REVIEW: NEED TO CHECK THAT THIS NAMING IS CONSISTENT WITH ANYWHERE ELSE WE HANDLE THIS
@@ -128,14 +129,18 @@ transformTypeFixerNodes = do
                         App fn args _ _ -> do
                             resolveExtended fn >>= go
                             traverse_ goRef args
-                        Cata _cataT handlers arg -> do
+                        Cata cataT handlers arg -> do
                             tyFixers <- gets (R..! #tyFixerData)
                             tn <- unsafeDatatypeName <$> unsafeRefType arg
-                            case cataData =<< M.lookup tn tyFixers of
-                                Nothing ->
-                                    error $
-                                        "Fatal Error: No type fixer function data for catamorphisms on " <> show tn
-                                Just dat@(TyFixerFnData _nm _enc cataFnPolyTy _compiled _schema _fnName _) -> do
+                            let getTyFixer = case M.lookup tn tyFixers of
+                                    Just bundle -> Just bundle
+                                    Nothing -> case cataT of
+                                        (CompN _ (Datatype bfTn _ :--:> ReturnT _)) -> M.lookup bfTn tyFixers
+                                        _ -> Nothing
+                            case cataData =<< getTyFixer of
+                                Nothing -> error $ "Fatal Error: No type fixer function data for catamorphisms on " <> show tn
+                                Just dat -> do
+                                    let cataFnPolyTy = tyFixerFnTy dat
                                     cataId <- tyFixerFnId
                                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId cataId) dat)
                                     handlerTypes <- traverse unsafeRefType (Vector.toList handlers)
@@ -162,7 +167,8 @@ transformTypeFixerNodes = do
                                 Nothing ->
                                     error $
                                         "Fatal Error: No type fixer function data for pattern matches on " <> show tn
-                                Just dat@(TyFixerFnData _nm _enc matchFnPolyTy _compiled _schema _fnName _) -> do
+                                Just dat -> do
+                                    let matchFnPolyTy = tyFixerFnTy dat
                                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId matchId) dat)
                                     let matchFnConcrete = applyArgs matchFnPolyTy (scrutTy : handlerTypes)
                                         newValNode = AppInternal (forgetExtendedId matchId) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
@@ -185,8 +191,8 @@ transformTypeFixerNodes = do
                                         Nothing -> error $ "Fatal Error: No data for constructor " <> show ctorName <> " found in type " <> show tn
                                         Just ctorIx -> do
                                             ctorFnId <- tyFixerFnId
-                                            let ctorFnData = constrFunctions Vector.! ctorIx
-                                                dat@(TyFixerFnData _nm _enc ctorFnPolyTy _compiled _schema _fnName _) = ctorFnData
+                                            let dat = constrFunctions Vector.! ctorIx
+                                                ctorFnPolyTy = tyFixerFnTy dat
                                                 ctorFnConcrete = applyArgs ctorFnPolyTy argTys
                                                 newValNode = AppInternal (forgetExtendedId ctorFnId) ctorArgs Vector.empty ctorFnConcrete
                                                 newASGNode = AValNode valT newValNode
