@@ -24,6 +24,7 @@ import Data.Row.Records (Rec, (.+), (.==))
 import Data.Row.Records qualified as R
 
 import Covenant.ASG (Id)
+import Covenant.ArgDict (crudePrettyASG')
 import Covenant.MockPlutus (PlutusTerm, pBuiltin)
 import Covenant.Prim (OneArgFunc (..))
 import Covenant.Transform.Common
@@ -38,10 +39,12 @@ import Debug.Trace
 
 transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
 transformASG dtDict = do
+    traceASG "initial"
     (tyFixerData, repPolyHandlers) <- runPassNoErrors dtDict initRepPolyHandlers $ do
         firstPass
         mkTypeFixerFnData
     toTransform <- getASG
+    traceASG "tyFixersConstructed"
     let transformState :: Rec TransformState
         transformState =
             #visited .== S.empty
@@ -49,6 +52,7 @@ transformASG dtDict = do
                 .+ #tyFixers .== M.empty
 
     asgBundle1 <- snd <$> runPassNoErrors dtDict transformState transformTypeFixerNodes
+    traceASG "after app transform"
     let initConcretifyCxt :: Rec ConcretifyCxt
         initConcretifyCxt =
             #context .== M.empty
@@ -58,12 +62,20 @@ transformASG dtDict = do
                 .+ #datatypes .== dtDict
     finalRepHandlers <- snd <$> runPassNoErrors initConcretifyCxt repPolyHandlers resolveRepPoly
     traceM $ "final rep handlers:\n" <> show finalRepHandlers <> "\n"
-    finalASG <- getASG
+    traceASG "after rep poly resolution "
     let codeGenData =
             #tyFixerData .== tyFixerData
                 .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
                 .+ #repPolyHandlers .== finalRepHandlers
     pure codeGenData
+
+ppASG :: forall m. (MonadASG m) => m String
+ppASG = crudePrettyASG' . M.mapKeys forgetExtendedId . extendedNodes <$> getASG
+
+traceASG :: forall m. (MonadASG m) => String -> m ()
+traceASG msg = do
+    pasg <- ppASG
+    traceM $ msg <> ":" <> "\n" <> pasg <> "\n"
 
 {-
 -- This actually inserts bodies into our identity fn / projection embed handlers

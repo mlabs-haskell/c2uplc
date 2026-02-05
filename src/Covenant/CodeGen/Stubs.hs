@@ -224,6 +224,9 @@ mkNil dtDict valT = case analyzeListTy dtDict valT of
         selectNil <- resolveStub selectNilNm
         pure . Just $ selectNil # i depth
 
+nilName :: forall (a :: Type). DefaultUni (Esc a) -> Text
+nilName w = "selectNil[" <> T.pack (show w) <> "]"
+
 -- :: a -> b -> (a -> Data) -> (b -> Data) -> Pair a b
 _mkPair :: forall m. (MonadStub m) => m ()
 _mkPair = declare "Pair" $
@@ -301,6 +304,7 @@ data StubError
     | MissingDeps Text (Set Text)
     | DepCycle (Cycle Text)
     | WitnessFail (ValT AbstractTy)
+    | ImpossibleNilTy (ValT AbstractTy)
     deriving stock (Show, Eq)
 
 newtype StubM m a = StubM (ExceptT StubError (StateT StubContext m) a)

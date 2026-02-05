@@ -21,6 +21,7 @@ import Control.Monad.RWS.Strict (MonadTrans (lift), RWS, ask, evalRWS, get, loca
 import Covenant.ASG (
     ASG,
     ASGNode (ACompNode, AValNode, AnError),
+    BoundTyVar,
     CompNodeInfo (Builtin1, Builtin2, Builtin3, Builtin6, Force, Lam),
     Id,
     Ref (AnArg, AnId),
@@ -28,17 +29,26 @@ import Covenant.ASG (
     nodeAt,
     topLevelId,
  )
-import Covenant.Type (AbstractTy (BoundAt), CompT (CompN), CompTBody (ArgsAndResult), ConstructorName (ConstructorName), TyName (TyName), ValT (..))
+import Covenant.Type (
+    AbstractTy (BoundAt),
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
+    ConstructorName (ConstructorName),
+    TyName (TyName),
+    ValT (..),
+ )
 
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
 import Covenant.ExtendedASG
 import Covenant.Index (Index, intCount, intIndex)
-import Covenant.Test (Arg (UnsafeMkArg), Id (UnsafeMkId))
+import Covenant.Test (Arg (UnsafeMkArg), BoundTyVar (BoundTyVar), Id (UnsafeMkId))
 
 import Control.Monad.Trans.Reader (ReaderT (runReaderT))
 import Covenant.Constant (AConstant (..))
 import Covenant.Transform.TyUtils
 import Data.Maybe (fromJust)
+import Data.Void (Void, vacuous)
+import Data.Wedge
 import Optics.Core (preview, review)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 import Prettyprinter
@@ -100,9 +110,18 @@ pCompT :: CompT AbstractTy -> String
 pCompT = show . prettyCompT
 
 prettyCompT :: forall ann. CompT AbstractTy -> Doc ann
-prettyCompT (CompN cnt (ArgsAndResult args result)) = mkForall <> "." <+> mkFn
+prettyCompT (CompN cnt (ArgsAndResult args result))
+    | null tyVars = mkFn
+    | otherwise = mkForall <> "." <+> mkFn
   where
-    mkForall = ("forall" <+>) . hsep . Vector.toList $ Vector.imap (\i _ -> "a_0" <> "#" <> pretty i) (countToTyVars cnt)
+    tyVars = countToTyVars cnt
+    mkForall =
+        ("forall" <+>)
+            . hsep
+            . Vector.toList
+            $ Vector.imap
+                (\i _ -> "a_0" <> "#" <> pretty i)
+                tyVars
     pArgs = Vector.toList $ prettyValT False <$> args
     pRes = "!" <> prettyValT True result
     mkFn = hsep $ punctuate " ->" (pArgs <> [pRes])
@@ -112,6 +131,100 @@ ppASG m = show $ runReaderT (simplePrettyASG getNode top (m M.! top)) (PrettyCon
   where
     top = fst $ M.findMax m
     getNode = flip M.lookup m
+
+crudePrettyASG' :: Map Id ASGNode -> String
+crudePrettyASG' = show . crudePrettyASG
+
+crudePrettyASG :: forall ann. Map Id ASGNode -> Doc ann
+crudePrettyASG nodes =
+    "["
+        <> hardline
+        <> (group (indent 2 (vcat . fmap (uncurry go) . M.toList $ nodes)))
+        <> "]"
+  where
+    go :: Id -> ASGNode -> Doc ann
+    go i node =
+        align . group $
+            ( vcat
+                [ prettyId i <+> ":" <+> prettyNodeTy node
+                , prettyId i <+> "=" <+> prettyNodeBody node
+                ]
+                <> hardline
+            )
+
+    prettyId (UnsafeMkId i) = "id_" <> pretty i
+
+    prettyRef = \case
+        AnArg (UnsafeMkArg db indx ty) ->
+            let db' = review asInt db
+                indx' = review intIndex indx
+                pty = prettyValT False ty
+             in parens $ "arg" <> pretty db' <> brackets (pretty indx') <+> ":" <+> pty
+        AnId i -> prettyId i
+
+    prettyInstTys :: [Wedge BoundTyVar (ValT Void)] -> Doc ann
+    prettyInstTys = hsep . map goInstTy
+      where
+        goInstTy :: Wedge BoundTyVar (ValT Void) -> Doc ann
+        goInstTy = \case
+            Nowhere -> "@NO_INST"
+            Here (BoundTyVar db indx) ->
+                let db' = review asInt db
+                    indx' = review intIndex indx
+                 in "@" <> parens ("tyVar" <> pretty db' <> brackets (pretty indx'))
+            There t -> "@" <> prettyValT True (vacuous t)
+
+    prettyLamCxt :: CompT AbstractTy -> Doc ann
+    prettyLamCxt (CompN _ (ArgsAndResult args _)) = hsep . Vector.toList . Vector.imap (\i -> parens . goCxt i) $ args
+      where
+        goCxt :: Int -> ValT AbstractTy -> Doc ann
+        goCxt indx t = "arg0" <> brackets (pretty indx) <+> ":" <+> prettyValT False t
+
+    prettyNodeBody :: ASGNode -> Doc ann
+    prettyNodeBody = \case
+        AnError -> "ERROR"
+        AValNode _ valInfo -> case valInfo of
+            Lit aConst -> case aConst of
+                AnInteger i -> pretty i
+                ABoolean b -> pretty b
+                AUnit -> pretty ()
+                AByteString bs -> viaShow bs
+                AString txt -> pretty txt
+            App fnId args instTys concrTy ->
+                let prettyFn = prettyId fnId
+                    prettyArgs = prettyRef <$> Vector.toList args
+                    prettyConcrFnTy = prettyCompT concrTy
+                    appBlob = align . group . encloseSep "" "" " # " $ (prettyFn : prettyArgs)
+                    instTyBlob = prettyInstTys (Vector.toList instTys)
+                 in brackets appBlob
+                        <+> instTyBlob
+                        <+> parens prettyConcrFnTy
+            Thunk child -> angles (prettyId child)
+            Cata compT handlers scrut ->
+                "cata"
+                    <+> ("@" <> parens (prettyCompT compT))
+                    <+> prettyRef scrut
+                    <+> list (prettyRef <$> Vector.toList handlers)
+            DataConstructor (TyName tn) (ConstructorName cn) args ->
+                pretty tn <> "." <> pretty cn <+> (align . group . encloseSep "" "" " " $ (prettyRef <$> Vector.toList args))
+            Match scrut args -> "match" <+> prettyRef scrut <+> list (prettyRef <$> Vector.toList args)
+        ACompNode compTy compInfo -> case compInfo of
+            Builtin1 bi1 -> viaShow bi1
+            Builtin2 bi2 -> viaShow bi2
+            Builtin3 bi3 -> viaShow bi3
+            Builtin6 bi6 -> viaShow bi6
+            Force forced -> "!" <> parens (prettyRef forced)
+            Lam body -> "\\" <> prettyLamCxt compTy <+> "->" <+> prettyRef body
+
+    prettyNodeTy :: ASGNode -> Doc ann
+    prettyNodeTy = \case
+        AnError -> "ERROR"
+        AValNode t _ -> prettyValT False t
+        ACompNode t _ -> prettyCompT t
+
+-- this prints it like a Haskell expression (i.e. it's meant for "is this what we really wanted?")
+-- The crude printer is better for debugging issues where you need to see everything explicitly
+-- (but in a more compact form than 'Show')
 simplePrettyASG ::
     forall m ann.
     (Monad m) =>

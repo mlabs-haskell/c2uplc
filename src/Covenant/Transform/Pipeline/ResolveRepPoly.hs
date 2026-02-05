@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Covenant.Transform.Pipeline.ResolveRepPoly where
 
@@ -24,14 +25,14 @@ import Covenant.Type (
     CompT (Comp0, CompN),
     CompTBody (ArgsAndResult, ReturnT, (:--:>)),
     DataEncoding (SOP),
-    ValT (Abstraction, BuiltinFlat, ThunkT),
+    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
  )
 
 import Control.Monad (unless, when)
 import Control.Monad.Reader (runReader)
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
-import Covenant.Index (Index, ix0, ix1)
-import Covenant.Test (ValNodeInfo (AppInternal))
+import Covenant.Index (Index, intIndex, ix0, ix1)
+import Covenant.Test (BoundTyVar (BoundTyVar), ValNodeInfo (AppInternal))
 import Data.Foldable (
     traverse_,
  )
@@ -43,11 +44,13 @@ import Covenant.Transform.Common
 import Data.Row.Records (Rec)
 import Data.Row.Records qualified as R
 
+import Covenant.ArgDict (pCompT, pValT)
 import Covenant.CodeGen.Stubs (HandlerType (..), MonadStub, resolveStub, trySelectHandler)
 import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad
 import Covenant.Transform.TyUtils
 import Data.Kind (Type)
+import Data.Wedge (Wedge (..))
 import Debug.Trace (traceM)
 
 {- By this point the entire asg is nothing but lam, app, thunk/force, and builtins/primitives
@@ -90,6 +93,13 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
         AnId i -> resolveExtended i >>= go
         AnArg{} -> pure ()
 
+    withLocation :: Id -> (ASTRef -> m r) -> m r
+    withLocation anId f = do
+        lamScope <- fmap (\(LambdaId x) -> x) <$> asks (R..! #callPath)
+        appScope <- fmap (\(AppId x) -> x) <$> asks (R..! #appPath)
+        let ref = ASTRef{underLams = lamScope, underApps = appScope, appNodeId = anId}
+        f ref
+
     dbBindingSite :: DeBruijn -> m LambdaId
     dbBindingSite db = do
         let dbInt = review asInt db
@@ -119,9 +129,7 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 --       care about the types as far as I can remember.
                 -- The only thing we have to do for Nil is make sure that the concrete fn type is
                 -- correct after the nullary application. That lets us codegen it correctly later on
-                List_Nil -> do
-                    let cNilTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) cFunTy
-                    eInsert appId $ AValNode rTy (AppInternal fn args instTys cNilTy)
+                List_Nil -> error $ "cleanupAppNode should never ever encounter a List_Nil ty fixer node but it encountered " <> show appId
                 -- All the annoyance of list is offloaded to nil, we don't have to do anything for cons
                 List_Cons -> pure ()
                 -- All of the intro forms for data are trivial and take no handlers / have no polymorphism
@@ -243,6 +251,28 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                     _ -> False
             pure $ fst <$> Vector.find (matchesLam . snd) appsWithNodes
 
+    -- returns m True if this is the node we care about that fixes the type of Nil.
+    checkForNilFixer :: ValNodeInfo -> m Bool
+    checkForNilFixer = \case
+        App fn args instTys cFunTy -> do
+            checkForForcedNil fn >>= \case
+                True | Vector.length instTys == 1 -> pure True
+                _ -> pure False
+        _ -> pure False
+      where
+        checkForForcedNil :: Id -> m Bool
+        checkForForcedNil i =
+            eNodeAt i >>= \case
+                ACompNode _ (Force (AnId hopefullyNil)) -> do
+                    tyFixers <- asks (R..! #tyFixers)
+                    eNodeAt hopefullyNil >>= \case
+                        AValNode _ (App plsBeNil shouldBeEmpty _whocares _irrelevant)
+                            | null shouldBeEmpty -> case M.lookup plsBeNil tyFixers of
+                                Just (BuiltinTyFixer _ List_Nil) -> pure True
+                                _ -> pure False
+                            | otherwise -> pure False
+                        _ -> pure False
+                _ -> pure False
     go :: ExtendedId -> m ()
     go eid =
         eNodeAt eid >>= \case
@@ -254,7 +284,45 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 Force fRef -> goRef fRef
                 _ -> pure ()
             appNode@(AValNode _valT valNode) -> case valNode of
-                (App fn args _instTys cFunTy) -> do
+                {- I am basically forced to handle "Nil" as a super special case -_-
+                   This should ONLY apply to Nil nil is the ONLY nullary constructor we NEED type information for
+                   in order to emit **UNTYPED** (SO THEY SAY!) Plutus Core -_-
+
+                   This is super frustratingly awkward. We're looking for a node such that:
+                     - It is an App Node
+                     - The fn part is "force nil"
+                     - There are no value args
+                     - There is exactly one instantiation arg
+                     - The type is `List t` where t is either a Concrete or Rigid.
+
+                   Which is all incredibly incredibly annoying asafddfslkj
+                -}
+                appHere@(App fn args instTys cFunTy) -> do
+                    fixesNilType <- checkForNilFixer appHere
+                    when fixesNilType $ do
+                        {- We have exactly 2 things to do here:
+                             - Ensure the concrete function type annotation in the node is fully concretified
+                             - Log that this node is the "true source of information" for an empty list
+
+                           The kind of node that matches our predicate should look something like (in my "pretty node" notation):
+                             id_2 : List IntegerT
+                             id_2 = [id_1] @IntegerT (!(List IntegerT))
+
+                           The @Integer there *could* be a rigid and so we need to ensure we resolve that if it is.
+                        -}
+                        case instTys Vector.! 0 of
+                            Nowhere -> error "nil type fixer without explicit instantiation type. cannot generate plutus lists w/o type info"
+                            Here (BoundTyVar db argIx) -> do
+                                (_, rigidResolved) <- resolveRigid (BoundAt db argIx)
+                                let concreteTy = Comp0 (ReturnT $ Datatype "List" [vacuous rigidResolved])
+                                    newApp = AppInternal fn args instTys concreteTy
+                                eInsert eid (AValNode _valT newApp)
+                                withLocation (forgetExtendedId eid) noteNilFixer
+                            There concreteVal -> do
+                                -- if the instantiation is concrete then the computation type is already good and we have nothing to do
+                                -- but note that this is what we want
+                                withLocation (forgetExtendedId eid) noteNilFixer
+
                     {- There have to be two branches here:
                          1. If  there aren't any rigids remaining in the "concrete as possible"
                             type ('ty' here) then we just log the result and move to the children
@@ -272,75 +340,83 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                               - Then we look up the entry for that Lambda,App pair and we're done with the
                                 "hard" part (we still have to do some annoying type/term surgery but that's just tedious)
 
-                        That should work. We have to be carefuly to only recurse with the
+                        That should work. We have to be careful to only recurse with the
                         current AppId cons'd onto the local reader context for the
                         FUNCTION PART of the recursion. The appChain is supposed to *mean* something like:
                         All of the applications above us which might determine the concrete types of our rigids.
                         An application can only concretify the type of the function.
                     -}
-                    polyFnTy <- unsafeFnTy fn
-                    fnEid <- resolveExtended fn
-                    let CompN cnt (ArgsAndResult polyArgs _) = polyFnTy
-                        bVars = Vector.toList $ countToAbstractions cnt
-                        CompN _ (ArgsAndResult monoArgs _) = cFunTy
-                        subs = flip runReader 0 $ getInstantiations bVars (Vector.toList polyArgs) (Vector.toList monoArgs)
-                        (concrete, nonConcrete) = M.partition isConcrete subs
-                        here = AppId . forgetExtendedId $ eid
-                    if null nonConcrete
-                        then do
-                            let thisContext = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
-                                localF :: Rec ConcretifyCxt -> Rec ConcretifyCxt
-                                localF =
-                                    mapField #context (M.insert here thisContext)
-                                        . mapField #appPath (Vector.cons here)
-                            local localF $ go fnEid
-                            traverse_ goRef args
-                            cleanupAppNode eid appNode thisContext
-                        else do
-                            let rigids = collectRigids cFunTy
-                            {- This is a map from the *lingering abstraction in this app node* to a concrete type.
-                               That doesn't by itself, give us what we want, since the index of the tyvar bound by
-                               the function of the app we're examining is totally unrelated to the index of the rigid
-                               in the lambda that binds IT.
+                    unless fixesNilType $ do
+                        polyFnTy <- unsafeFnTy fn
+                        fnEid <- resolveExtended fn
+                        let CompN cnt (ArgsAndResult polyArgs _) = polyFnTy
+                            bVars = Vector.toList $ countToAbstractions cnt
+                            CompN _ (ArgsAndResult monoArgs _) = cFunTy
+                            subs = flip runReader 0 $ getInstantiations bVars (Vector.toList polyArgs) (Vector.toList monoArgs)
+                            (concrete, nonConcrete) = M.partition isConcrete subs
+                            here = AppId . forgetExtendedId $ eid
+                        if null nonConcrete
+                            then do
+                                let thisContext = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
+                                    localF :: Rec ConcretifyCxt -> Rec ConcretifyCxt
+                                    localF =
+                                        mapField #context (M.insert here thisContext)
+                                            . mapField #appPath (Vector.cons here)
+                                local localF $ go fnEid
+                                traverse_ goRef args
+                                cleanupAppNode eid appNode thisContext
+                            else do
+                                let rigids = collectRigids cFunTy
+                                {- This is a map from the *lingering abstraction in this app node* to a concrete type.
+                                   That doesn't by itself, give us what we want, since the index of the tyvar bound by
+                                   the function of the app we're examining is totally unrelated to the index of the rigid
+                                   in the lambda that binds IT.
 
-                               Another way of putting this: We know that there is a rigid in our conrete-as-possible-up-to-now type,
-                               and we know what the rigid resolves to, but what we do not yet know is what exactly OUR type
-                               variable gets concretified to to).
+                                   Another way of putting this: We know that there is a rigid in our conrete-as-possible-up-to-now type,
+                                   and we know what the rigid resolves to, but what we do not yet know is what exactly OUR type
+                                   variable gets concretified to to).
 
-                               We cannot assume that the type variable we're trying to solve necessarily concretifies to
-                               a rigid directly. For example, if have an identity function like
+                                   We cannot assume that the type variable we're trying to solve necessarily concretifies to
+                                   a rigid directly. For example, if have an identity function like
 
-                               `id :: forall a. a -> a`
+                                   `id :: forall a. a -> a`
 
-                               And we apply it to `Maybe r3` (where r3 is a rigid type variable bound in an enclosing lambda),
-                               then. We'd end up with the substitution `a ~ Maybe r3`.
+                                   And we apply it to `Maybe r3` (where r3 is a rigid type variable bound in an enclosing lambda),
+                                   then. We'd end up with the substitution `a ~ Maybe r3`.
 
-                               So what we have to do here is to substitute into the "non-concrete" types using our rigidsResolved
-                               dictionary. Note that the keys in this are abstractions that occur in the function type HERE.
-                               Following our example for clarity, we have:
+                                   So what we have to do here is to substitute into the "non-concrete" types using our rigidsResolved
+                                   dictionary. Note that the keys in this are abstractions that occur in the function type HERE.
+                                   Following our example for clarity, we have:
 
-                                 nonConcrete = [a := Maybe r3]
-                                 rigidsResolved = [r3 := Int]   -- Int is just an example concrete type
+                                     nonConcrete = [a := Maybe r3]
+                                     rigidsResolved = [r3 := Int]   -- Int is just an example concrete type
 
-                               And if we substitute into the elements of nonConcrete using rigidsResolved, we should get
-                                 [a := Maybe Int]
-                            -}
-                            rigidsResolved <- M.fromList <$> traverse resolveRigid (S.toList rigids)
-                            let resolvedNonConcrete =
-                                    M.mapKeys (\(BoundAt _ i) -> i) $
-                                        assertConcrete
-                                            . runSubst 0 id (vacuous <$> rigidsResolved)
-                                            <$> nonConcrete
-                                sanitizedConcrete = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
-                                thisContext = resolvedNonConcrete <> sanitizedConcrete
-                                localF =
-                                    mapField #context (M.insert here thisContext)
-                                        . mapField #appPath (Vector.cons here)
-                            local localF $ go fnEid
-                            traverse_ goRef args
-                            cleanupAppNode eid appNode thisContext
+                                   And if we substitute into the elements of nonConcrete using rigidsResolved, we should get
+                                     [a := Maybe Int]
+                                -}
+                                rigidsResolved <- M.fromList <$> traverse resolveRigid (S.toList rigids)
+                                let resolvedNonConcrete =
+                                        M.mapKeys (\(BoundAt _ i) -> i) $
+                                            assertConcrete
+                                                . runSubst 0 id (vacuous <$> rigidsResolved)
+                                                <$> nonConcrete
+                                    sanitizedConcrete = M.mapKeys (\(BoundAt _ i) -> i) $ assertConcrete <$> concrete
+                                    thisContext = resolvedNonConcrete <> sanitizedConcrete
+                                    localF =
+                                        mapField #context (M.insert here thisContext)
+                                            . mapField #appPath (Vector.cons here)
+                                local localF $ go fnEid
+                                traverse_ goRef args
+                                cleanupAppNode eid appNode thisContext
                 Thunk child -> resolveExtended child >>= go
                 -- This is only meant to be used on ASGs that have undergone the
                 -- TypeFixerNode -> AppNode transformation, so there shouldn't be any other possibilities
                 -- here. (We can ignore literals)
                 _ -> pure ()
+
+-- stupid utils & debugging
+prettySubs :: forall ann. Map (Index "tyvar") (ValT Void) -> String
+prettySubs = concatMap (uncurry go) . M.toList
+  where
+    go :: Index "tyvar" -> ValT Void -> String
+    go (review intIndex -> i) (vacuous -> ty) = ("id" <> show i) <> " := " <> pValT ty

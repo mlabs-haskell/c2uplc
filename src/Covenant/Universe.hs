@@ -94,6 +94,7 @@ decideUniType dtDict = \case
                             DefaultUniApply DefaultUniProtoList $
                                 DefaultUniApply DefaultUniProtoPair proofK `DefaultUniApply` proofV
             _ -> Nothing
+    _ -> Nothing
   where
     hasDataEncoding :: TyName -> Bool
     hasDataEncoding tn = case view #originalDecl <$> M.lookup tn dtDict of

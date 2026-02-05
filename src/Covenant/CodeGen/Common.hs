@@ -81,7 +81,7 @@ import Covenant.MockPlutus (
     (#),
  )
 
-import Covenant.ArgDict ()
+import Covenant.ArgDict (pCompT)
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.State (State, execState, runState)
@@ -90,10 +90,10 @@ import Covenant.ExtendedASG (ExtendedASG, ExtendedId (..), MonadASG (getASG), ex
 import Covenant.JSON (CompilationUnit)
 import Covenant.Prim (OneArgFunc (..), TwoArgFunc (..))
 import Covenant.Transform (transformASG)
-import Covenant.Transform.Common (BuiltinFnData (..), TyFixerFnData (BuiltinTyFixer, TyFixerFnData), pFreshLam, pFreshLam', pFreshLam2)
+import Covenant.Transform.Common (BuiltinFnData (..), TyFixerFnData (BuiltinTyFixer, TyFixerFnData), pFreshLam, pFreshLam', pFreshLam2, tyFixerFnTy)
 import Covenant.Transform.Pipeline.Common (CodeGenData, TransformState)
-import Covenant.Transform.Pipeline.Monad (CodeGen, PassM, RepPolyHandlers (RepPolyHandlers), runPass)
-import Covenant.Transform.TyUtils (LambdaId (LambdaId), idToName)
+import Covenant.Transform.Pipeline.Monad (ASTRef (..), CodeGen, PassM, RepPolyHandlers (RepPolyHandlers), runPass)
+import Covenant.Transform.TyUtils (AppId (AppId), LambdaId (LambdaId), idToName)
 import Data.Bifunctor (Bifunctor (first, second))
 import Data.Maybe (isJust)
 import Data.Row.Records (HasType, KnownSymbol, Label, Rec, (.+), (.==), type (.+), type (.==))
@@ -129,8 +129,11 @@ newtype CodeGenContext
             ( "termScope" .== Map Id PlutusTerm
                 .+ "argScope" .== Map LambdaId (Vector Name)
                 .+ "lamScope" .== Vector LambdaId
+                -- We ONLY need an appscope for resolving Nil -_-
+                .+ "appScope" .== Vector AppId
                 .+ "asg" .== Map Id ASGNode
                 .+ "tyFixers" .== Map Id TyFixerFnData
+                .+ "repPolyHandlers" .== RepPolyHandlers
             )
     }
 
@@ -171,8 +174,8 @@ data ArgResolutionFailReason
 -- TODO rewrite all the sigs to use constraints, no time now
 type CodeGenM a = PassM CodeGenError CodeGenContext Int a
 
-runCodeGenM :: forall a. Map Id TyFixerFnData -> Map Id ASGNode -> Map Id PlutusTerm -> CodeGenM a -> CodeGen (Either CodeGenError a)
-runCodeGenM fixers m termScope act =
+runCodeGenM :: forall a. RepPolyHandlers -> Map Id TyFixerFnData -> Map Id ASGNode -> Map Id PlutusTerm -> CodeGenM a -> CodeGen (Either CodeGenError a)
+runCodeGenM repPoly fixers m termScope act =
     runPass cxt 0 act >>= \case
         Left err -> pure $ Left err
         Right (a, s) -> pure $ Right a
@@ -182,9 +185,10 @@ runCodeGenM fixers m termScope act =
             #termScope .== termScope
                 .+ #argScope .== mempty
                 .+ #lamScope .== mempty
+                .+ #appScope .== mempty
                 .+ #asg .== m
                 .+ #tyFixers .== fixers
-
+                .+ #repPolyHandlers .== repPoly
 getNode :: Id -> CodeGenM (Maybe ASGNode)
 getNode i = do
     r <- asks getContext
@@ -200,6 +204,11 @@ getLamScope = do
     CodeGenContext r <- ask
     pure $ r R..! #lamScope
 
+getAppScope :: CodeGenM (Vector AppId)
+getAppScope = do
+    CodeGenContext r <- ask
+    pure $ r R..! #appScope
+
 getTermScope :: CodeGenM (Map Id PlutusTerm)
 getTermScope = do
     CodeGenContext r <- ask
@@ -209,6 +218,12 @@ getTyFixers :: CodeGenM (Map Id TyFixerFnData)
 getTyFixers = do
     CodeGenContext r <- ask
     pure $ r R..! #tyFixers
+
+checkNilFixer :: Id -> CodeGenM Bool
+checkNilFixer i = do
+    CodeGenContext r <- ask
+    let RepPolyHandlers _ _ nilFixers = r R..! #repPolyHandlers
+    withLocation i $ \astRef -> pure $ astRef `S.member` nilFixers
 
 lookupVar :: Id -> CodeGenM (Maybe PlutusTerm)
 lookupVar i = do
@@ -268,6 +283,17 @@ crossLam compT lid@(LambdaId i) act = do
             . rModify (M.insert lid vars) #argScope
             $ r
 
+-- TODO: Better name, this one is just a wrapper over 'local' (we need this to check ASTRefs in the
+--       `canLet` stuff). This is all so we don't try to lift sub-ASGs that contain "disposable"
+--       Nil type fixers
+crossLamX :: forall a. LambdaId -> CodeGenM a -> CodeGenM a
+crossLamX lid = local go
+  where
+    go (CodeGenContext r) = CodeGenContext $ rModify (Vector.cons lid) #lamScope r
+
+crossApp :: AppId -> CodeGenM r -> CodeGenM r
+crossApp appId = local (\(CodeGenContext r) -> CodeGenContext $ rModify (Vector.cons appId) #appScope r)
+
 rModify ::
     forall (l :: Symbol) (t :: Type) (r :: R.Row Type).
     (KnownSymbol l, HasType l t r) =>
@@ -289,9 +315,10 @@ runTopDownCompile plData = do
         nodes = prepRec R..! #onlySrcNodes
         topId = fst $ M.findMax nodes
         termScope = prepRec R..! #initTermScope
+        repHandlers = plData R..! #repPolyHandlers
 
         doBinds = foldr (\(nm, term) acc -> pLet nm term . acc) id (prepRec R..! #bind)
-    fmap doBinds <$> runCodeGenM (plData R..! #tyFixers) nodes termScope (compileTopDown topId)
+    fmap doBinds <$> runCodeGenM repHandlers (plData R..! #tyFixers) nodes termScope (compileTopDown topId)
 
 prettyMap :: (Show k, Show v) => Map k v -> String
 prettyMap = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"
@@ -327,7 +354,7 @@ prepare plData eAsg = do
         _ -> False
 
     tyFixers = plData R..! #tyFixers
-    RepPolyHandlers byId byTy = plData R..! #repPolyHandlers
+    RepPolyHandlers byId byTy nilFixers = plData R..! #repPolyHandlers
 
     go i = case M.lookup i tyFixers of
         Just (TyFixerFnData _ _ _ thisTermCompiled _ nm _) -> do
@@ -344,54 +371,70 @@ prepare plData eAsg = do
 
 nodeOrVar :: Id -> CodeGenM (Either PlutusTerm ASGNode)
 nodeOrVar i =
-    lookupVar i >>= \case
-        Just aVar -> pure $ Left aVar
-        Nothing ->
-            getNode i >>= \case
-                Just aNode -> pure $ Right aNode
-                Nothing -> do
-                    error $ "No node or synthetic var info for: " <> show i
+    traceM ("nodeOrVar " <> show i)
+        >> lookupVar i
+        >>= \case
+            Just aVar -> pure $ Left aVar
+            Nothing ->
+                getNode i >>= \case
+                    Just aNode -> pure $ Right aNode
+                    Nothing -> do
+                        tyFixers <- getTyFixers
+                        case M.lookup i tyFixers of
+                            Nothing -> error $ "No node or synthetic var info for: " <> show i
+                            Just tyFixer ->
+                                error $
+                                    "Somehow something tried to resolve Id "
+                                        <> show i
+                                        <> " which belongs to a type fixer of type: "
+                                        <> pCompT (tyFixerFnTy tyFixer)
 
 compileTopDown :: Id -> CodeGenM PlutusTerm
 compileTopDown nodeId =
-    nodeOrVar nodeId >>= \case
-        Left nm -> pure nm
-        Right aNode -> case aNode of
-            ACompNode compTy compNodeInfo -> case compNodeInfo of
-                Builtin1 bi1 -> pure $ pBuiltin bi1
-                Builtin2 bi2 -> pure $ pBuiltin bi2
-                Builtin3 bi3 -> pure $ pBuiltin bi3
-                Builtin6 bi6 -> pure $ pBuiltin bi6
-                Force r -> pForce <$> compileRef r
-                Lam r -> crossLam compTy (LambdaId nodeId) $ do
-                    toBind <- letBinds (LambdaId nodeId) r
-                    withLocalBinds toBind $ compileRef r
-            AValNode valTy valNodeInfo -> case valNodeInfo of
-                Lit aConstant -> litToTerm aConstant
-                App fnId argRefs _ fnTy -> do
-                    tyFixers <- getTyFixers
-                    -- special handling for Nil -_-
-                    case M.lookup fnId tyFixers of
-                        Just (BuiltinTyFixer _ List_Nil) -> do
-                            let CompN _ (ArgsAndResult _ listTy) = fnTy
-                            mkNil mempty listTy >>= \case
-                                Nothing -> throwError $ InvalidNilTy listTy
-                                Just myNil -> pure myNil
-                        Just (BuiltinTyFixer _ biTyFixer) -> do
-                            biFixer <- compileBIFixer biTyFixer
-                            args <- traverse compileRef argRefs
-                            pure $ foldl' pApp biFixer args
-                        _other -> do
-                            fn <- compileTopDown fnId
-                            args <- traverse compileRef argRefs
-                            pure $ foldl' pApp fn args
-                Thunk childId -> pDelay <$> compileTopDown childId
-                other -> error $ "value nodes should all be lits apps or thunks but got: " <> show other
+    traceM ("COMPILE TOP DOWN: " <> show nodeId)
+        >> nodeOrVar nodeId
+        >>= \case
+            Left nm -> traceM ("NOT_A_NODE " <> show nm) >> pure nm
+            Right aNode -> case aNode of
+                ACompNode compTy compNodeInfo -> case compNodeInfo of
+                    Builtin1 bi1 -> pure $ pBuiltin bi1
+                    Builtin2 bi2 -> pure $ pBuiltin bi2
+                    Builtin3 bi3 -> pure $ pBuiltin bi3
+                    Builtin6 bi6 -> pure $ pBuiltin bi6
+                    Force r -> traceM ("FORCE " <> show nodeId <> " " <> show r) >> pForce <$> compileRef r
+                    Lam r -> traceM ("LAM " <> show nodeId <> " " <> show r) >> crossLam compTy (LambdaId nodeId) $ do
+                        toBind <- letBinds (LambdaId nodeId) r
+                        withLocalBinds toBind $ compileRef r
+                AValNode valTy valNodeInfo -> case valNodeInfo of
+                    Lit aConstant -> litToTerm aConstant
+                    App fnId argRefs _ fnTy -> do
+                        traceM ("APP " <> show nodeId)
+                        tyFixers <- getTyFixers
+                        -- special handling for Nil -_-
+                        isNilFixer <- checkNilFixer nodeId
+                        if isNilFixer
+                            then do
+                                let CompN _ (ArgsAndResult _ listTy) = fnTy
+                                mkNil mempty listTy >>= \case
+                                    Nothing -> throwError $ InvalidNilTy listTy
+                                    Just myNil -> pure myNil
+                            else case M.lookup fnId tyFixers of
+                                Just (BuiltinTyFixer _ biTyFixer) -> do
+                                    biFixer <- compileBIFixer biTyFixer
+                                    args <- traverse compileRef argRefs
+                                    pure $ foldl' pApp biFixer args
+                                _other -> do
+                                    fn <- compileTopDown fnId
+                                    args <- traverse compileRef argRefs
+                                    pure $ foldl' pApp fn args
+                    Thunk childId -> traceM ("THUNK " <> show nodeId) >> pDelay <$> compileTopDown childId
+                    other -> error $ "value nodes should all be lits apps or thunks but got: " <> show other
   where
     compileRef :: Ref -> CodeGenM PlutusTerm
-    compileRef r = case r of
-        AnId i -> compileTopDown i
-        AnArg arg -> pVar <$> resolveArg arg
+    compileRef r =
+        traceM ("COMPILE REF: " <> show r) >> case r of
+            AnId i -> compileTopDown i
+            AnArg arg -> pVar <$> resolveArg arg
 
     -- we can't do Nil w/ just this information so we catch it above
     compileBIFixer :: BuiltinFnData -> CodeGenM PlutusTerm
@@ -472,24 +515,27 @@ getBindableSubTerms dbOffset = \case
   where
     withNode :: forall m. m -> Id -> (ASGNode -> CodeGenM m) -> CodeGenM m
     withNode def i f =
-        nodeOrVar i >>= \case
-            Left _ -> pure def
-            Right node -> f node
+        alreadyCompiled i >>= \case
+            True -> pure def
+            False ->
+                nodeOrVar i >>= \case
+                    Left _ -> pure def
+                    Right node -> f node
 
     go :: Int -> Id -> CodeGenM (Map Id ASGNode)
     go dbOff nodeId = do
         withNode mempty nodeId $ \thisNode -> do
-            safeToBind dbOff thisNode >>= \case
+            safeToBind nodeId dbOff thisNode >>= \case
                 True -> pure $ M.singleton nodeId thisNode
                 False -> case thisNode of
                     ACompNode _ compNodeInfo -> case compNodeInfo of
                         Force r -> goRef dbOff r
-                        Lam r -> goRef (dbOff + 1) r
+                        Lam r -> crossLamX (LambdaId nodeId) $ goRef (dbOff + 1) r
                         _ -> pure M.empty
                     AValNode _ valNodeInfo -> case valNodeInfo of
                         Lit{} -> pure $ M.singleton nodeId thisNode
                         App fnId args _ _ -> do
-                            fnBinds <- go dbOff fnId
+                            fnBinds <- crossApp (AppId fnId) $ go dbOff fnId
                             argBinds <- M.unions <$> traverse (goRef dbOff) args
                             pure $ fnBinds <> argBinds
                         Thunk childId -> go dbOff childId
@@ -501,25 +547,30 @@ getBindableSubTerms dbOffset = \case
             AnId childId -> go dbDist childId
 
     alreadyCompiled :: Id -> CodeGenM Bool
-    alreadyCompiled = fmap isJust . lookupVar
+    alreadyCompiled i = do
+        inCxt <- isJust <$> lookupVar i
+        isStub <- isJust <$> (getTyFixers >>= \m -> pure $ M.lookup i m)
+        RepPolyHandlers _ _ nilFixers <- asks (\(CodeGenContext r) -> r R..! #repPolyHandlers)
+        isNilFixer <- withLocation i $ \astRef -> pure $ astRef `S.member` nilFixers
+        pure (inCxt || isStub || isNilFixer)
 
-    safeToBind :: Int -> ASGNode -> CodeGenM Bool
-    safeToBind dbOff = \case
-        ACompNode _ compNodeInfo -> case compNodeInfo of
+    safeToBind :: Id -> Int -> ASGNode -> CodeGenM Bool
+    safeToBind nodeId dbOff = \case
+        ACompNode compTy compNodeInfo -> case compNodeInfo of
             Force r -> safeToBindRef dbOff r
             Lam r ->
                 -- FIXME
                 -- we really want to check that it's EITHER "locally scoped"
                 -- OR that all occurrences of any vars point to a higher level than the current point
-                safeToBindRef (dbOff + 1) r
+                crossLamX (LambdaId nodeId) $ safeToBindRef (dbOff + 1) r
             _ -> pure True
         AValNode _ valNodeInfo -> case valNodeInfo of
             Lit _ -> pure True
             App fnId args _ _ -> do
-                okFn <- withNode True fnId $ safeToBind dbOff
+                okFn <- crossApp (AppId fnId) $ withNode True fnId $ safeToBind fnId dbOff
                 okArgs <- and <$> traverse (safeToBindRef dbOff) args
                 pure $ okFn && okArgs
-            Thunk childId -> withNode True childId $ safeToBind dbOff
+            Thunk childId -> withNode True childId $ safeToBind childId dbOff
             _ -> pure False -- can't exist
     safeToBindRef :: Int -> Ref -> CodeGenM Bool
     safeToBindRef dbDist = \case
@@ -535,7 +586,14 @@ getBindableSubTerms dbOffset = \case
         AnId i ->
             alreadyCompiled i >>= \case
                 True -> pure True
-                False -> withNode True i $ safeToBind dbDist
+                False -> withNode True i $ safeToBind i dbDist
+
+withLocation :: forall r. Id -> (ASTRef -> CodeGenM r) -> CodeGenM r
+withLocation i f = do
+    lamScope <- fmap (\(LambdaId x) -> x) <$> getLamScope
+    appScope <- fmap (\(AppId x) -> x) <$> getAppScope
+    let ref = ASTRef{underLams = lamScope, underApps = appScope, appNodeId = i}
+    f ref
 
 -- first part of tuple satisfies the monadic predicate, second part doesn't
 partitionM :: forall (m :: Type -> Type) a. (Monad m) => (a -> m Bool) -> Vector a -> m (Vector a, Vector a)

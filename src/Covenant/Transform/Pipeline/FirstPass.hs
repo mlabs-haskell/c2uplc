@@ -90,8 +90,9 @@ firstPass = do
                     fnId <- case htype of
                         Proj -> projectionId
                         Embed -> embeddingId
-                    modify' $ \(RepPolyHandlers byId byTy) ->
+                    modify' $ \(RepPolyHandlers byId byTy nilFixers) ->
                         RepPolyHandlers
                             (M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) byId)
                             (M.insert (ty, htype) (forgetExtendedId fnId) byTy)
+                            nilFixers
                     eInsert fnId synthNode
