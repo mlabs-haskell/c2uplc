@@ -38,7 +38,8 @@ import Covenant.Data (DatatypeInfo)
 import Covenant.MockPlutus
 import Covenant.Prim (OneArgFunc (IData, ListData, UnIData, UnListData))
 import Covenant.Universe
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import PlutusCore.Data (Data (I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)

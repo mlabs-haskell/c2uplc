@@ -48,7 +48,8 @@ import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad
 import Data.Kind (Type)
 import Data.Map.Strict (Map)
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import UntypedPlutusCore ()
 
 {- NOTE: The type of the "function part" is just going to be the BBF (plus unwrappers),

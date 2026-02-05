@@ -35,7 +35,6 @@ import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)
 import Covenant.Transform.Pipeline.Monad (CodeGen, Datatypes (Datatypes), initRepPolyHandlers, runPass, runPassNoErrors)
 import Covenant.Transform.Pipeline.ResolveRepPoly (resolveRepPoly)
 import Covenant.Type
-import Debug.Trace
 
 transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
 transformASG dtDict = do

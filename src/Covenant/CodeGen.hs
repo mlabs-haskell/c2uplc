@@ -1,4 +1,4 @@
-module Covenant.CodeGen (compile, evalTerm, compilePretty, CodeGenError) where
+module Covenant.CodeGen (compile, compileIO, evalTerm, compilePretty, CodeGenError) where
 
 import Covenant.ASG (
     ASGNode (ACompNode, AValNode, AnError),
@@ -68,14 +68,16 @@ import Covenant.MockPlutus (
     pLam,
     pVar,
     plutus_ConstrData,
+    prettyPTerm,
  )
 
 import Covenant.ArgDict ()
 import Covenant.CodeGen.Common
 
+import Codec.Serialise (writeFileSerialise)
 import Control.Monad.Except (runExceptT)
 import Covenant.ExtendedASG (extendedNodes, unExtendedASG, wrapASG)
-import Covenant.JSON (CompilationUnit (CompilationUnit))
+import Covenant.JSON (CompilationUnit (CompilationUnit), deserializeCompilationUnit)
 import Covenant.Transform (transformASG)
 import Covenant.Transform.Common (TyFixerFnData (TyFixerFnData))
 import Covenant.Transform.Pipeline.Common (CodeGenData, TransformState)
@@ -83,7 +85,6 @@ import Covenant.Transform.TyUtils (idToName)
 import Data.Maybe (isJust)
 import Data.Row.Records (Rec)
 import Data.Row.Records qualified as R
-import Debug.Trace
 import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
 import Prettyprinter
@@ -91,6 +92,8 @@ import UntypedPlutusCore (Unique (Unique))
 
 -- evaluation stuff
 
+import Codec.Extras.SerialiseViaFlat (SerialiseViaFlat (SerialiseViaFlat))
+import Control.Exception (throwIO)
 import Covenant.CodeGen.Stubs (StubError)
 import Covenant.Transform.Pipeline.Monad (CodeGen, Datatypes (Datatypes), runCodeGen)
 import Data.Bifunctor (Bifunctor (first))
@@ -131,152 +134,47 @@ compile cu@(CompilationUnit datatypesRaw asg _version) = first WrapStubError $ r
         let here = "let" <+> pretty i <+> "=" <+> viaShow node
          in prettyNodes (here : acc) rest
 
-{-
-generatePLC ::
-    Rec PipelineData ->
-    Map Id (Either (Vector Name) (Vector Id)) ->
-    [(Id, ASGNode)] ->
-    CodeGenM PlutusTerm
-generatePLC pipelineData argDict = \case
-    [] -> throwError NoASG
-    ((i, n) : rest) -> go i n rest
-  where
-    -- If we want to ensure our synthetic type fixer fn nodes have useful names we need to catch that *here*
-    go :: Id -> ASGNode -> [(Id, ASGNode)] -> CodeGenM PlutusTerm
-    go i node rest
-        | isJust (M.lookup i (pipelineData R..! #tyFixers)) = do
-            -- we don't really need to check the tail because the only way this could
-            -- be the last node is if we were passed a totally empty ASG (in which case we'd never
-            -- do the type fixer transformation anyway and no nodes would exist)
-            let TyFixerFnData _ _ _ thisTermCompiled _ nm _ = (pipelineData R..! #tyFixers) M.! i
-                UnsafeMkId iInner = i
-                fnNm = Name nm (Unique (fromIntegral iInner))
-            modify $ M.insert i (pVar fnNm)
-            case rest of
-                ((i', node') : rest') -> do
-                    termInner <- go i' node' rest'
-                    pure $ pLam fnNm termInner `pApp` thisTermCompiled
-                [] -> error "FILL IN THIS CASE"
-        | isJust (M.lookup i (pipelineData R..! #handlerStubs)) = do
-            let stub = (pipelineData R..! #handlerStubs) M.! i
-                iName = idToName i
-                iVar = pVar iName
-            -- though I kind of suspect that inlining everything except an identity fn
-            -- will always gives a smaller script and make no perf difference
-            modify $ M.insert i iVar
-            case rest of
-                [] -> pure stub
-                ((i', node') : rest') -> do
-                    termInner <- go i' node' rest'
-                    pure $ pLam iName termInner `pApp` stub
-        | otherwise = case rest of
-            [] -> nodeToTerm i argDict node
-            ((i', node') : rest') -> do
-                thisTerm <- nodeToTerm i argDict node
-                let iName = idToName i
-                let iVar = pVar iName
-                {- If you put this back it will stop inlining everything
-                modify $ M.insert i iVar
-                termInner <- go i' node' rest'
-                pure $ pLam iName termInner `pApp` thisTerm
-                -}
-                modify $ M.insert i thisTerm
-                go i' node' rest'
+compileIO :: FilePath -> IO ()
+compileIO path = do
+    putStrLn $ "Attempting to compile compilation unit at: " <> path <> "..."
+    cu <- deserializeCompilationUnit path
+    putStrLn "Compilation unit successfully deserialized and validated."
+    putStrLn "Attempting to generate UPLC code..."
+    case compile cu of
+        Left cgErr -> throwIO . userError $ "Code generation failed\nReason: " <> show cgErr
+        Right aTerm -> do
+            putStrLn "Code generation succeeded!"
+            putStrLn "Raw Script:"
+            print aTerm
+            putStrLn ""
+            putStrLn "Pretty Script:"
+            print (prettyPTerm aTerm)
+            putStrLn ""
+            putStrLn "Attempting to pre-evaluate result (reduces script size / optimizes code / catches simple mistakes)..."
+            case evalTerm aTerm of
+                Left plcErr -> do
+                    putStrLn "Evaluation failed :-("
+                    putStrLn "  Reason:"
+                    putStrLn plcErr
+                Right evalResult -> do
+                    putStrLn "Evaluation succeeded!"
+                    putStrLn "Raw evaluated script:"
+                    print evalResult
+                    putStrLn "Pretty evaluated script:"
+                    print (prettyPTerm evalResult)
+                    putStrLn "Writing output to: ./SCRIPT.plc"
+                    serializePlc "SCRIPT.plc" evalResult
 
-{- For now we're just going to let bind everything. We can fix it later.
-if letBindable
-    then do
-        modify $ M.insert i thisTerm
-        go i' node' rest'
-    else do
-        let iName = idName i
-        let iVar = pVar iName
-        modify $ M.insert i iVar
-        termInner <- go i' node' rest'
-        pure $ pLam iName termInner `pApp` thisTerm
--}
+serializePlc ::
+    FilePath ->
+    PlutusTerm ->
+    IO ()
+serializePlc path =
+    writeFileSerialise path
+        . SerialiseViaFlat
+        . UPLC.UnrestrictedProgram
+        . UPLC.Program () PLC.latestVersion
 
-{- TODO: Intro forms need to have a `Delay` in the generated code b/c they end up as thunks in the
-         covenant ASG.
--}
--- This should ONLY EVER BE CALLED THE FIRST TIME WE ENCOUNTER A NODE IN `generatePLC`
-nodeToTerm ::
-    Id -> -- The Id of *THIS* node. Needed for arg resolution
-    Map Id (Either (Vector Name) (Vector Id)) ->
-    ASGNode ->
-    CodeGenM PlutusTerm
-nodeToTerm i argDict node = case node of
-    ACompNode _compTy compNodeInfo -> case compNodeInfo of
-        Builtin1 bi1 -> pure $ pBuiltin bi1
-        Builtin2 bi2 -> pure $ pBuiltin bi2
-        Builtin3 bi3 -> pure $ pBuiltin bi3
-        Builtin6 bi6 -> pure $ pBuiltin bi6
-        Force r -> forceToTerm i argDict r
-        Lam r -> lamToTerm argDict i r
-    AValNode _valT valNodeInfo -> case valNodeInfo of
-        Lit aConstant -> litToTerm aConstant
-        App i' args _ _ -> do
-            fTerm <- lookupTerm i'
-            resolvedArgs <- traverse (refToTerm i' argDict) args
-            pure $ foldl' pApp fTerm resolvedArgs
-        Thunk i' -> thunkToTerm i'
-        _ -> error "All type fixing pseudo-app nodes should have been removed from the ASG by the point we call this function"
-    AnError -> pure pError
-
-thunkToTerm :: Id -> CodeGenM PlutusTerm
-thunkToTerm = fmap pDelay . lookupTerm
-
-lamToTerm ::
-    Map Id (Either (Vector Name) (Vector Id)) -> -- our argument resolution dictionary
-    Id -> -- the Id of the lambda node
-    Ref -> -- body
-    CodeGenM PlutusTerm
-lamToTerm argDict lamNodeId bodyRef = case M.lookup lamNodeId argDict of
-    Just (Left names) -> do
-        -- I thiiiink?
-        let f = foldl' (\g argN -> g . pLam argN) id names
-        resolvedBody <- refToTerm lamNodeId argDict bodyRef
-        pure $ f resolvedBody
-    _anythingElse ->
-        error $
-            "Error, expected a Vector of Names in arg res dict entry for lamda id  "
-                <> show lamNodeId
-                <> " but got "
-                <> show _anythingElse
-
-forceToTerm ::
-    Id -> -- id of the parent node
-    Map Id (Either (Vector Name) (Vector Id)) -> -- arg resolution dict
-    Ref -> -- the thing we're forcing
-    CodeGenM PlutusTerm
-forceToTerm parentId argDict = fmap pForce . refToTerm parentId argDict
-
-refToTerm ::
-    Id -> -- This is the Id of the *immediate parent node*. We need that for this to work bottom up
-    Map Id (Either (Vector Name) (Vector Id)) -> -- The resolution dictory for args (tells us which names correspond to them)
-    Ref ->
-    CodeGenM PlutusTerm
-refToTerm parentId argDict = \case
-    AnId i -> do
-        -- Again, this is looking up something which should always or almost always be a variable.
-        -- If it weren't for the fact that we do give some things informative variable names, we could just
-        -- convert the Id directly into its name.
-        lookupTerm i
-    AnArg (UnsafeMkArg db ix _) -> do
-        let dbInt = review asInt db
-            ixInt = review intIndex ix
-        case M.lookup parentId argDict of
-            Nothing -> throwError $ ArgResolutionFail (ParentIdLookupFailed parentId)
-            Just cxt -> case cxt of
-                Left _names -> throwError $ ArgResolutionFail (ParentIdPointsAtNames parentId)
-                Right idCxt -> case idCxt Vector.!? dbInt of
-                    Nothing -> throwError $ ArgResolutionFail (DBIndexOutOfBounds db)
-                    Just bindingLamId -> case M.lookup bindingLamId argDict of
-                        Nothing -> throwError $ ArgResolutionFail (NoBindingContext bindingLamId)
-                        Just hopefullyNames -> case hopefullyNames of
-                            Left namesForReal -> pure . pVar $ namesForReal Vector.! ixInt
-                            Right _ -> throwError $ ArgResolutionFail (LamIdPointsAtContext bindingLamId)
--}
 -- TODO: Need to rework this to ignore synthetic (compiler generated) nodes since we really really really
 --       want to make sure they definitely get let bound
 countOccurs :: Id -> [ASGNode] -> Int

@@ -51,7 +51,8 @@ import Covenant.Transform.Pipeline.Monad
 import Covenant.Transform.TyUtils
 import Data.Kind (Type)
 import Data.Wedge (Wedge (..))
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 
 {- By this point the entire asg is nothing but lam, app, thunk/force, and builtins/primitives
 -}

@@ -101,13 +101,16 @@ import Data.Row.Records qualified as R
 import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Traversable (forM)
-import Debug.Trace
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import GHC.TypeLits (Symbol)
 import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
 import Prettyprinter
 import UntypedPlutusCore (Unique (Unique))
+
+traceM :: forall m. (Monad m) => String -> m ()
+traceM _ = pure ()
 
 {- Since we're switching to top-down compilation, this has to work a little differently.
 

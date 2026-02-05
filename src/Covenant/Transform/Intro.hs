@@ -52,7 +52,11 @@ import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Text (Text)
 import Data.Text qualified as T
-import Debug.Trace
+
+-- import Debug.Trace
+
+traceM :: forall m. (Monad m) => String -> m ()
+traceM _ = pure ()
 
 -- TODO: Better comments (tho fortunately this one is the most straightforward)
 

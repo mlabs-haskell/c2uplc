@@ -69,6 +69,7 @@ common lang
     , optics-extra
     , prettyprinter
     , row-types
+    , serialise         ==0.2.6.1
     , smash
     , text
     , transformers
@@ -99,6 +100,7 @@ executable c2uplc
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:
+    , c2uplc
     , filepath              ==1.4.301.0
     , optparse-applicative  ==0.19.0.0
 

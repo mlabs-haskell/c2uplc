@@ -51,13 +51,17 @@ import Data.Set qualified as S
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Wedge (Wedge (..))
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import PlutusCore.Data (Data (Constr, I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 import UntypedPlutusCore (Term (Error))
 import UntypedPlutusCore.Evaluation.Machine.SteppableCek.DebugDriver (mkCekTrans)
+
+traceM :: forall m. (Monad m) => String -> m ()
+traceM _ = pure ()
 
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.

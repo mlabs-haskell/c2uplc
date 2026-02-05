@@ -43,8 +43,12 @@ import Data.Row.Records (HasType, Rec, Row, type (.+), type (.==))
 import Data.Row.Records qualified as R
 import Data.Text qualified as T
 import Data.Vector qualified as Vector
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import GHC.TypeLits (KnownSymbol, Symbol)
+
+traceM :: forall m. (Monad m) => String -> m ()
+traceM _ = pure ()
 
 type CodeGenData =
     "tyFixerData" .== Map TyName TyFixerDataBundle

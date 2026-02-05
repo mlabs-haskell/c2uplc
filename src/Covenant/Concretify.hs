@@ -8,59 +8,7 @@
 
 module Covenant.Concretify where
 
-import Data.Map (Map)
-import Data.Map qualified as M
-
-import Data.Set (Set)
-import Data.Set qualified as S
-import Data.Vector (Vector)
-import Data.Vector qualified as Vector
-
-import Control.Monad.RWS.Strict (RWS, ask, asks, execRWS, local, modify)
-
-import Covenant.ASG (
-    ASG,
-    ASGNode (ACompNode, AValNode, AnError),
-    CompNodeInfo (Force, Lam),
-    Id,
-    Ref (AnArg, AnId),
-    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
-    nodeAt,
-    topLevelId,
- )
-import Covenant.Type (
-    AbstractTy (BoundAt),
-    CompT (Comp0, CompN),
-    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
-    Constructor (Constructor),
-    ConstructorName (ConstructorName),
-    DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding (BuiltinStrategy, PlutusData, SOP),
-    PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
-    TyName,
-    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
-    tyvar,
- )
-
-import Control.Applicative (Alternative ((<|>)))
-import Control.Monad (join)
-import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (Reader, runReader)
-import Control.Monad.State.Strict (MonadState (get), StateT)
-import Covenant.Data (DatatypeInfo, mkMatchFunTy)
-import Covenant.DeBruijn (DeBruijn (S, Z), asInt)
-import Covenant.Index (Count, Index, count2, intCount, intIndex, ix0, ix1, wordCount)
-import Covenant.Test (Id (UnsafeMkId))
-import Data.Foldable (find, foldl', traverse_)
-import Data.Kind (Type)
-import Data.Maybe (fromJust, mapMaybe)
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Void (Void, vacuous)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Debug.Trace
-import Optics.Core (ix, preview, review, view, (%))
-import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+-- TODO delete all of this
 
 {-
 -- Constructs all the intermediate resources and then determines the full range of concretifications for every lambda/call site in the ASG

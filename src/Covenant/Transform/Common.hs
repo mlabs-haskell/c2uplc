@@ -90,12 +90,16 @@ import Data.Kind (Type)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Debug.Trace (traceM)
+
+-- import Debug.Trace (traceM)
 import Optics.Core (preview, review)
 import PlutusCore.Name.Unique (
     Name (Name),
     Unique (Unique),
  )
+
+traceM :: forall m. (Monad m) => String -> m ()
+traceM _ = pure ()
 
 prettyMap' :: (Show k, Show v) => Map k v -> String
 prettyMap' = M.foldrWithKey (\k v acc -> show k <> " := " <> show v <> "\n" <> acc) "\n"

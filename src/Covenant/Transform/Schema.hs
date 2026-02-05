@@ -26,8 +26,12 @@ import Covenant.Index (Index, intCount, intIndex)
 import Data.Foldable (
     foldl',
  )
-import Debug.Trace (trace)
+
+-- import Debug.Trace (trace)
 import Optics.Core (preview, review)
+
+trace :: forall a. String -> a -> a
+trace _ x = x
 
 {- This module contains functions (and types) for resolving the argument position of "extra handler args".
 
