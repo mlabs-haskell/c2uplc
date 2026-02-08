@@ -106,7 +106,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Debug.Trace (traceM)
 import GHC.TypeLits (Symbol)
 import Optics.Core (review)
 import PlutusCore (Name (Name))
@@ -360,8 +359,7 @@ prepare plData eAsg = do
 
 nodeOrVar :: Id -> CodeGenM (Either PlutusTerm ASGNode)
 nodeOrVar i =
-  traceM ("nodeOrVar " <> show i)
-    >> lookupVar i
+  lookupVar i
     >>= \case
       Just aVar -> pure $ Left aVar
       Nothing ->
@@ -387,10 +385,9 @@ nodeOrVar i =
 
 compileTopDown :: Id -> CodeGenM PlutusTerm
 compileTopDown nodeId =
-  traceM ("COMPILE TOP DOWN: " <> show nodeId)
-    >> nodeOrVar nodeId
+  nodeOrVar nodeId
     >>= \case
-      Left nm -> traceM ("NOT_A_NODE " <> show nm) >> pure nm
+      Left nm -> pure nm
       Right aNode -> case aNode of
         AnError -> throwError UnexpectedError
         ACompNode compTy compNodeInfo -> case compNodeInfo of
@@ -398,14 +395,13 @@ compileTopDown nodeId =
           Builtin2 bi2 -> pure $ pBuiltin bi2
           Builtin3 bi3 -> pure $ pBuiltin bi3
           Builtin6 bi6 -> pure $ pBuiltin bi6
-          Force r -> traceM ("FORCE " <> show nodeId <> " " <> show r) >> pForce <$> compileRef r
-          Lam r -> traceM ("LAM " <> show nodeId <> " " <> show r) >> crossLam compTy (LambdaId nodeId) $ do
+          Force r -> pForce <$> compileRef r
+          Lam r -> crossLam compTy (LambdaId nodeId) $ do
             toBind <- letBinds (LambdaId nodeId) r
             withLocalBinds toBind $ compileRef r
         AValNode _ valNodeInfo -> case valNodeInfo of
           Lit aConstant -> litToTerm aConstant
           App fnId argRefs _ fnTy -> do
-            traceM ("APP " <> show nodeId)
             tyFixers <- getTyFixers
             -- special handling for Nil -_-
             isNilFixer <- checkNilFixer nodeId
@@ -428,27 +424,26 @@ compileTopDown nodeId =
                   fn <- compileTopDown fnId
                   args <- traverse compileRef argRefs
                   pure $ foldl' pApp fn args
-          Thunk childId -> traceM ("THUNK " <> show nodeId) >> pDelay <$> compileTopDown childId
+          Thunk childId -> pDelay <$> compileTopDown childId
           other -> error $ "value nodes should all be lits apps or thunks but got: " <> show other
   where
     compileRef :: Ref -> CodeGenM PlutusTerm
-    compileRef r =
-      traceM ("COMPILE REF: " <> show r) >> case r of
-        AnId i -> do
-          -- we have to check here for "nil-fixer-ness", I think?
-          isNilFixer <- checkNilFixer i
-          if isNilFixer
-            then
-              nodeOrVar i >>= \case
-                Right (AValNode _ (App _ _ _ fnTy)) -> do
-                  let CompN _ (ArgsAndResult _ listTy) = fnTy
-                  mkNil mempty listTy >>= \case
-                    Nothing -> throwError $ InvalidNilTy listTy
-                    Just myNil -> pure myNil
-                _ -> error "non-app node marked as nil fixer"
-            else do
-              compileTopDown i
-        AnArg arg -> pVar <$> resolveArg arg
+    compileRef r = case r of
+      AnId i -> do
+        -- we have to check here for "nil-fixer-ness", I think?
+        isNilFixer <- checkNilFixer i
+        if isNilFixer
+          then
+            nodeOrVar i >>= \case
+              Right (AValNode _ (App _ _ _ fnTy)) -> do
+                let CompN _ (ArgsAndResult _ listTy) = fnTy
+                mkNil mempty listTy >>= \case
+                  Nothing -> throwError $ InvalidNilTy listTy
+                  Just myNil -> pure myNil
+              _ -> error "non-app node marked as nil fixer"
+          else do
+            compileTopDown i
+      AnArg arg -> pVar <$> resolveArg arg
 
     -- we can't do Nil w/ just this information so we catch it above
     compileBIFixer :: BuiltinFnData -> CodeGenM PlutusTerm

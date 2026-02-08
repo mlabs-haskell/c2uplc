@@ -22,7 +22,7 @@ module Covenant.CodeGen.Stubs
   )
 where
 
-import Algebra.Graph.AdjacencyMap (adjacencyList, fromAdjacencySets)
+import Algebra.Graph.AdjacencyMap (fromAdjacencySets)
 import Algebra.Graph.AdjacencyMap.Algorithm (Cycle, reachable, topSort)
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
 import Control.Monad.RWS.Strict (RWST)
@@ -140,9 +140,6 @@ import PlutusCore.Default
   )
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
-
-traceM :: forall m. (Monad m) => String -> m ()
-traceM _ = pure ()
 
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.
@@ -522,10 +519,6 @@ compileStubM scope act =
               . M.toList
               . M.filterWithKey (\k _ -> k `S.member` reachableFromTop)
               $ depCs
-      traceM $ "\ndeps: " <> show depCs
-      traceM $ "\ntopDeps: " <> show topDeps
-      traceM $ "\nreachableFromTop: " <> show reachableFromTop
-      traceM $ "\nonlyTrueDeps: " <> show (adjacencyList onlyTrueDeps)
       case topSort onlyTrueDeps of
         Left ohNoACycle -> pure (Left $ DepCycle ohNoACycle)
         Right (reverse -> depsInOrder) -> pure $ foldr (letBindEm binds) (Right inner) depsInOrder

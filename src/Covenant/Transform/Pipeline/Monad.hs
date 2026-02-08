@@ -29,7 +29,6 @@ import Control.Monad.State.Strict
     evalState,
     modify',
   )
-import Covenant.ArgDict (pValT)
 import Covenant.CodeGen.Stubs
   ( HandlerType (Embed, Proj),
     HasStubError,
@@ -53,7 +52,7 @@ import Covenant.ExtendedASG
     forgetExtendedId,
     projectionId,
   )
-import Covenant.Plutus (PlutusTerm, prettyPTerm)
+import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
@@ -63,7 +62,6 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Void (Void, absurd)
-import Debug.Trace (traceM)
 
 {- I need some kind of unifying abstraction for all the transformation passes here.
 
@@ -229,17 +227,10 @@ selectHandlerId ::
 selectHandlerId (Datatypes dtDict) htype valT = do
   (RepPolyHandlers _ byType _) <- get
   case M.lookup (valT, htype) byType of
-    Just i -> do
-      let msg = "\nselectHandlerId (found in cxt) " <> show htype <> " " <> pValT valT <> " = " <> show i
-      traceM msg
-      pure i
+    Just i -> pure i
     Nothing ->
       trySelectHandler dtDict htype valT >>= \case
-        Nothing -> do
-          idenId <- stubId "id"
-          let msg = "\nselectHandlerId (IDENTITY) " <> show htype <> " " <> pValT valT <> " = " <> show idenId
-          traceM msg
-          pure idenId
+        Nothing -> stubId "id"
         Just aHandler -> do
           eid <- case htype of
             Proj -> projectionId
@@ -251,8 +242,6 @@ selectHandlerId (Datatypes dtDict) htype valT = do
                   (M.insert (valT, htype) i byType')
                   nilFixers
           modify' updF
-          let msg = "\nselectHandlerId (NEW BIND) " <> show htype <> " " <> pValT valT <> " = " <> show i <> "\n  " <> show (prettyPTerm aHandler)
-          traceM msg
           pure i
 
 {- This just notes that a given node is a type fixing node for Nil.

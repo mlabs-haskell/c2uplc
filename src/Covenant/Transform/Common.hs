@@ -33,7 +33,6 @@ module Covenant.Transform.Common
   )
 where
 
-import Covenant.ArgDict (pValT, pVec)
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.ExtendedASG (MonadASG, nextId)
 import Covenant.Index (Count, intCount, intIndex)
@@ -45,7 +44,6 @@ import Covenant.Plutus
     pLam,
     pSnd,
     pVar,
-    ppTerm,
     unConstrData,
     (#),
   )
@@ -59,7 +57,6 @@ import Covenant.Type
     TyName,
     ValT (Abstraction, ThunkT),
   )
-import Data.Bifunctor (Bifunctor (bimap))
 import Data.Foldable
   ( foldl',
   )
@@ -74,9 +71,6 @@ import PlutusCore.Name.Unique
   ( Name (Name),
     Unique (Unique),
   )
-
-traceM :: forall m. (Monad m) => String -> m ()
-traceM _ = pure ()
 
 {- This records the information we need for our "mock" functions for catamorphisms/datatype intro/datatype elimination
 
@@ -368,25 +362,8 @@ genFiniteListEliminator branchHandler aList resolveProjection elTys =
       resolveProjection ty >>= \case
         Just projVar -> do
           let result = pApp projVar headEl
-          let msg =
-                "\nresolveProjection SUCCESS\n  ty: "
-                  <> pValT ty
-                  <> "\n  term: "
-                  <> ppTerm headEl
-                  <> "\n  result: "
-                  <> ppTerm result
-          traceM msg
-          pure $ pApp projVar headEl
-        Nothing -> do
-          let msg =
-                "\nresolveProjection FAIL\n  ty: "
-                  <> pValT ty
-                  <> "\n  term: "
-                  <> ppTerm headEl
-                  <> "\n  result: "
-                  <> ppTerm headEl
-          traceM msg
-          pure headEl
+          pure result
+        Nothing -> pure headEl
 
     finalizer :: [PlutusTerm] -> m PlutusTerm
     finalizer = pure . foldl' pApp branchHandler
@@ -434,13 +411,6 @@ pCaseConstrData scrutinee typedHandlers lookupShim = do
           ThunkT (CompN _ (ArgsAndResult args _)) -> Vector.toList args
           _ -> []
     genFiniteListEliminator handler ctorArgs lookupShim hArgs
-  traceM $
-    "\npCaseConstrData: \n  scrut: "
-      <> ppTerm scrutinee
-      <> "\n  typedHandlers: "
-      <> show (bimap pValT ppTerm <$> typedHandlers)
-      <> "\n  resolvedHandlers: "
-      <> pVec ppTerm plcHandlers
   pure $ pCase ctorIx plcHandlers
   where
     constrDataPair = unConstrData scrutinee

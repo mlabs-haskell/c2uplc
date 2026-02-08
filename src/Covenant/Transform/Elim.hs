@@ -7,7 +7,6 @@ where
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.RWS.Strict (MonadReader, MonadState)
-import Covenant.ArgDict (pName, pValT, pVec)
 import Covenant.CodeGen.Stubs (MonadStub)
 import Covenant.Data (DatatypeInfo (DatatypeInfo), mkMatchFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z))
@@ -19,7 +18,6 @@ import Covenant.Plutus
     pForce,
     pLam,
     pVar,
-    ppTerm,
     unIData,
     unListData,
   )
@@ -49,7 +47,6 @@ import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
   ( lookupDatatypeInfo,
     resolvePolyRepHandler,
-    traceM,
   )
 import Covenant.Transform.Pipeline.Monad
   ( Datatypes,
@@ -203,13 +200,6 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
           typedBranchHandlers = insertForce <$> Vector.zip (Vector.drop 1 origMatchFnArgs) rawBranchHandlers
 
           (_, branchHandlers) = Vector.unzip typedBranchHandlers
-      traceM $
-        "genElimPLC:\n  matchFnArgs: "
-          <> pVec pValT matchFnArgs
-          <> "\n  lamArgNames: "
-          <> pVec pName lamArgNames
-          <> "\n branchHandlers: "
-          <> pVec ppTerm rawBranchHandlers
       case schema of
         SOPSchema _ ->
           {- This is the easiest one. We do the only thing we could possibly do.
@@ -245,22 +235,20 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                       "CodeGen failure while generating PLC match function for type "
                         <> T.unpack tyNameInner
                         <> ": No handler for single ProductListData ctor"
-                  Just thisBranchHandler -> do
-                    traceM $ "\n  thisBranchHandlerTy: " <> show thisBranchHandler
-                    case thisBranchHandler of
-                      -- In the generated match function we do not ever construct a (ThunkT (ReturnT v))
-                      -- value, so we should be able to ignore the possibility.
-                      ThunkT (CompN _ (ArgsAndResult thisBranchHandlerArgTys _)) -> do
-                        listEliminator <-
-                          genFiniteListEliminator
-                            (lamArgVars Vector.! 1)
-                            (unListData scrutinee)
-                            resolveUnwrapper
-                            (Vector.toList thisBranchHandlerArgTys)
-                        pure . lamBuilder $ listEliminator
-                      _ ->
-                        -- Anything else means we have a nullary constructor and can bypass any hard work here
-                        pure . lamBuilder $ branchHandlers Vector.! 1
+                  Just thisBranchHandler -> case thisBranchHandler of
+                    -- In the generated match function we do not ever construct a (ThunkT (ReturnT v))
+                    -- value, so we should be able to ignore the possibility.
+                    ThunkT (CompN _ (ArgsAndResult thisBranchHandlerArgTys _)) -> do
+                      listEliminator <-
+                        genFiniteListEliminator
+                          (lamArgVars Vector.! 1)
+                          (unListData scrutinee)
+                          resolveUnwrapper
+                          (Vector.toList thisBranchHandlerArgTys)
+                      pure . lamBuilder $ listEliminator
+                    _ ->
+                      -- Anything else means we have a nullary constructor and can bypass any hard work here
+                      pure . lamBuilder $ branchHandlers Vector.! 1
               ConstrData -> do
                 {- See comments on `pCaseConstrData` in Covenant.Transform.Common for an explanation
                    of exactly how this works. The general idea is that we use casing on the constructor index

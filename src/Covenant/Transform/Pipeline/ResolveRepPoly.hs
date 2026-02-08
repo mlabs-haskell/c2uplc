@@ -63,7 +63,6 @@ import Covenant.Transform.Common
 import Covenant.Transform.Pipeline.Common
   ( ConcretifyCxt,
     mapField,
-    traceM,
   )
 import Covenant.Transform.Pipeline.Monad
   ( ASTRef (ASTRef, appNodeId, underApps, underLams),
@@ -264,15 +263,7 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                       CataNode -> Proj
                       MatchNode -> Proj
                       IntroNode -> Embed
-                res <- AnId <$> selectHandlerId datatypes htype (vacuous varTyConcrete)
-                traceM $
-                  "node cleanup: index = "
-                    <> show hIndx
-                    <> ", htype = "
-                    <> show htype
-                    <> ", result = "
-                    <> show res
-                pure res
+                AnId <$> selectHandlerId datatypes htype (vacuous varTyConcrete)
 
           -- We don't actually *have* to fix the concretified type annotation in the app node, but
           -- it doesn't really hurt if we do and might save us during debugging

@@ -9,7 +9,6 @@ module Covenant.Transform.Pipeline.Common
     ConcretifyCxt,
     resolvePolyRepHandler,
     lookupDatatypeInfo,
-    traceM,
     syntheticLamNode,
     mapField,
   )
@@ -22,7 +21,6 @@ import Covenant.ASG
     Id,
     Ref (AnId),
   )
-import Covenant.ArgDict (pValT, pVec)
 import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), MonadStub, trySelectHandler)
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG
@@ -31,7 +29,7 @@ import Covenant.ExtendedASG
     MonadASG (getASG, putASG),
   )
 import Covenant.Index (Index)
-import Covenant.Plutus (PlutusTerm, ppTerm)
+import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (CompNodeInfo (LamInternal))
 import Covenant.Transform.Common
   ( TyFixerDataBundle,
@@ -60,9 +58,6 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Data.Void (Void)
 import GHC.TypeLits (KnownSymbol, Symbol)
-
-traceM :: forall m. (Monad m) => String -> m ()
-traceM _ = pure ()
 
 type CodeGenData =
   "tyFixerData" .== Map TyName TyFixerDataBundle
@@ -157,12 +152,12 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
   ValT AbstractTy ->
   m (Maybe PlutusTerm)
 resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
-  traceM msg >> case valT of
+  case valT of
     Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of
       Nothing -> case maybeR of
-        Just rIndex | indx == rIndex -> traceM "resolve r" >> pure . Just $ lamArgVars Vector.! 0
-        _ -> traceM "resolve no handler no r" >> pure Nothing
-      Just hIx -> traceM ("resolve result: " <> show hIx) >> pure . pure $ lamArgVars Vector.! hIx
+        Just rIndex | indx == rIndex -> pure . Just $ lamArgVars Vector.! 0
+        _ -> pure Nothing
+      Just hIx -> pure . pure $ lamArgVars Vector.! hIx
     other -> do
       Datatypes dtDict <- ask
       let hType = case nodeKind of
@@ -170,13 +165,3 @@ resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
             MatchNode -> Proj
             IntroNode -> Embed
       trySelectHandler dtDict hType other
-  where
-    msg =
-      "\nresolvePolyRep:\n  "
-        <> show handlerArgPosDict
-        <> "\n   valTy: "
-        <> pValT valT
-        <> "\n  argVars: "
-        <> pVec ppTerm lamArgVars
-        <> "\n  maybeR: "
-        <> show maybeR
