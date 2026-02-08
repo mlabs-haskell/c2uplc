@@ -1,12 +1,7 @@
 module Main (main) where
 
-import Codec.Extras.SerialiseViaFlat (SerialiseViaFlat (SerialiseViaFlat))
-import Codec.Serialise (serialise)
-import Control.Exception (throwIO)
-import Control.Monad.Except (runExceptT)
 import Covenant.CodeGen (compile, evalTerm)
 import Covenant.JSON (deserializeCompilationUnit)
-import Data.Aeson (encodeFile, object)
 import Data.Set qualified as Set
 import Options.Applicative
   ( ArgumentFields,
@@ -28,7 +23,6 @@ import Options.Applicative
   )
 import PlutusCore qualified as PLC
 import PlutusCore.Annotation (SrcSpans (SrcSpans))
-import PlutusCore.DeBruijn.Internal (runDeBruijnT)
 import PlutusLedgerApi.Envelope (writeCodeEnvelope)
 import PlutusTx.Code (CompiledCodeIn (DeserializedCode))
 import System.Exit (exitFailure, exitSuccess)
@@ -65,6 +59,7 @@ main = do
             Left err -> do
               putStrLn "DeBruijn conversion of named terms failed"
               putStrLn "If you see this, it is definitely an internal error: please report it!"
+              print err
               exitFailure
             Right result -> pure result
           let asProgram = UPLC.Program () PLC.latestVersion withNamedDB

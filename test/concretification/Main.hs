@@ -1,25 +1,47 @@
 {-# LANGUAGE OverloadedLists #-}
+-- TODO: Once tests are wired this should be removed
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
-module Main where
+module Main (main) where
 
-import Control.Monad.HashCons (MonadHashCons (lookupRef))
 import Covenant.ASG
-import Covenant.Concretify
+  ( ASG,
+    ASGBuilder,
+    CovenantError,
+    Id,
+    Ref (AnArg, AnId),
+    app',
+    arg,
+    builtin2,
+    builtin3,
+    ctor',
+    defaultDatatypes,
+    force,
+    lam,
+    lazyLam,
+    lit,
+    match,
+    runASGBuilder,
+  )
 import Covenant.Constant (AConstant (ABoolean, AnInteger))
-import Covenant.DeBruijn
-import Covenant.Index
+import Covenant.DeBruijn (DeBruijn (S, Z))
+import Covenant.Index (ix0, ix1, ix2)
 import Covenant.Prim (ThreeArgFunc (IfThenElse), TwoArgFunc (EqualsInteger))
-import Covenant.Test
+import Covenant.Test (concretifyMegaTest)
 import Covenant.Type
-import Data.Maybe (fromJust)
-import Data.Vector (Vector)
-import Data.Wedge (Wedge (Here, Nowhere, There))
-import Optics.Core (preview, review)
+  ( AbstractTy,
+    BuiltinFlatT (IntegerT),
+    CompT (Comp0, Comp1),
+    CompTBody (ReturnT, (:--:>)),
+    ValT (BuiltinFlat, ThunkT),
+    boolT,
+    tyvar,
+  )
 
 main :: IO ()
 main = case debugTest hiddenConcretificationTest of
-    Left err -> error (show err)
-    Right asg -> print $ asg
+  Left err -> error (show err)
+  Right asg -> print asg
 
 -- FIXME: The maybe here *really* should be `Either`, we might not get "enough rigids" here for this to be useful w Maybe,
 --        but it's easier to start w/ maybe and get that compiling then switch over
@@ -80,26 +102,23 @@ smallerTestFn = runASGBuilder defaultDatatypes smallerTest
 
 smallerTest :: ASGBuilder Id
 smallerTest = lam topLevelTy $ do
-    h <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) $ AnId <$> lit (AnInteger 2)
-    g <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) $ do
-        x <- AnArg <$> arg Z ix0
-        AnId <$> app' h [x]
-    i <- AnArg <$> arg Z ix0
-    b <- AnArg <$> arg Z ix1
-    gi <- AnId <$> app' g [i]
-    gb <- AnId <$> app' g [b]
-    gi #== gb
+  h <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) $ AnId <$> lit (AnInteger 2)
+  g <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) $ do
+    x <- AnArg <$> arg Z ix0
+    AnId <$> app' h [x]
+  i <- AnArg <$> arg Z ix0
+  b <- AnArg <$> arg Z ix1
+  gi <- AnId <$> app' g [i]
+  gb <- AnId <$> app' g [b]
+  gi #== gb
   where
     topLevelTy :: CompT AbstractTy
     topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
-    intT :: ValT AbstractTy
-    intT = BuiltinFlat IntegerT
-
 (#==) :: Ref -> Ref -> ASGBuilder Ref
 x #== y = do
-    equals <- builtin2 EqualsInteger
-    AnId <$> app' equals [x, y]
+  equals <- builtin2 EqualsInteger
+  AnId <$> app' equals [x, y]
 
 {--
 
@@ -118,16 +137,13 @@ noRigidsTestFn = runASGBuilder defaultDatatypes noRigidsTest
 
 noRigidsTest :: ASGBuilder Id
 noRigidsTest = lam topLevelTy $ do
-    g <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) $ (AnId <$> lit (AnInteger 2))
-    i <- AnArg <$> arg Z ix0
-    b <- AnArg <$> arg Z ix1
-    gi <- AnId <$> app' g [i]
-    gb <- AnId <$> app' g [b]
-    gi #== gb
+  g <- lam (Comp1 $ tyvar Z ix0 :--:> ReturnT intT) (AnId <$> lit (AnInteger 2))
+  i <- AnArg <$> arg Z ix0
+  b <- AnArg <$> arg Z ix1
+  gi <- AnId <$> app' g [i]
+  gb <- AnId <$> app' g [b]
+  gi #== gb
   where
-    intT :: ValT AbstractTy
-    intT = BuiltinFlat IntegerT
-
     topLevelTy :: CompT AbstractTy
     topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
@@ -159,69 +175,62 @@ intT = BuiltinFlat IntegerT
 
 ifte :: ASGBuilder Id
 ifte = lam (Comp1 $ boolT :--:> tyvar Z ix0 :--:> tyvar Z ix0 :--:> ReturnT (tyvar Z ix0)) $ do
-    cond <- AnArg <$> arg Z ix0
-    t <- AnArg <$> arg Z ix1
-    f <- AnArg <$> arg Z ix2
-    ifThen <- builtin3 IfThenElse
-    AnId <$> app' ifThen [cond, t, f]
+  cond <- AnArg <$> arg Z ix0
+  t <- AnArg <$> arg Z ix1
+  f <- AnArg <$> arg Z ix2
+  ifThen <- builtin3 IfThenElse
+  AnId <$> app' ifThen [cond, t, f]
 
 hiddenConcretification :: Either CovenantError ASG
 hiddenConcretification = runASGBuilder defaultDatatypes hiddenConcretificationTest
 
 hiddenConcretificationTest :: ASGBuilder Id
 hiddenConcretificationTest = lam topLevelTy $ do
-    rigidBinder <- rigidBinderTest
-    i <- AnArg <$> arg Z ix0
-    b <- AnArg <$> arg Z ix1
-    identitee <- lazyLam (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0)) $ AnArg <$> arg Z ix0
-    boolToInt <- lazyLam (Comp0 $ boolT :--:> ReturnT intT) $ do
-        ifThen <- ifte
-        cond <- AnArg <$> arg Z ix0
-        zero <- AnId <$> lit (AnInteger 0)
-        one <- AnId <$> lit (AnInteger 1)
-        AnId <$> app' ifThen [cond, one, zero]
-    intResult <- AnId <$> app' rigidBinder [i, AnId identitee]
-    boolResult <- AnId <$> app' rigidBinder [b, AnId boolToInt]
-    AnId <$> (intResult #&& boolResult)
+  rigidBinder <- rigidBinderTest
+  i <- AnArg <$> arg Z ix0
+  b <- AnArg <$> arg Z ix1
+  identitee <- lazyLam (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0)) $ AnArg <$> arg Z ix0
+  boolToInt <- lazyLam (Comp0 $ boolT :--:> ReturnT intT) $ do
+    ifThen <- ifte
+    cond <- AnArg <$> arg Z ix0
+    zero <- AnId <$> lit (AnInteger 0)
+    one <- AnId <$> lit (AnInteger 1)
+    AnId <$> app' ifThen [cond, one, zero]
+  intResult <- AnId <$> app' rigidBinder [i, AnId identitee]
+  boolResult <- AnId <$> app' rigidBinder [b, AnId boolToInt]
+  AnId <$> (intResult #&& boolResult)
   where
-    rigidBinderTy :: CompT AbstractTy
-    rigidBinderTy =
-        Comp1 $
-            tyvar Z ix0
-                :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT intT)
-                :--:> ReturnT boolT
-
     topLevelTy :: CompT AbstractTy
     topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
 (#&&) :: Ref -> Ref -> ASGBuilder Id
 b1 #&& b2 = do
-    ifThen <- ifte
-    fawlse <- AnId <$> lit (ABoolean False)
-    app' ifThen [b1, b2, fawlse]
+  ifThen <- ifte
+  fawlse <- AnId <$> lit (ABoolean False)
+  app' ifThen [b1, b2, fawlse]
 
 rigidBinderTest :: ASGBuilder Id
 rigidBinderTest = lam rigidBinderTy $ do
-    g <- lam (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT boolT) $ do
-        y <- AnArg <$> arg Z ix0
-        h <- arg (S Z) ix1 >>= force . AnArg
-        zero <- AnId <$> lit (AnInteger 0)
-        hy <- app' h [y]
-        AnId hy #== zero
-    f <- lam (Comp0 $ intT :--:> ReturnT boolT) $ do
-        justHandler <- lazyLam (Comp0 $ tyvar (S (S Z)) ix0 :--:> ReturnT boolT) $ do
-            AnId <$> lit (ABoolean False)
-        nothingHandler <- lazyLam (Comp0 $ ReturnT boolT) $ do
-            AnId <$> lit (ABoolean False)
-        x <- AnArg <$> arg (S Z) ix0
-        m <- ctor' "Maybe" "Just" [x]
-        AnId <$> match (AnId m) [AnId justHandler, AnId nothingHandler]
+  _ <- lam (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT boolT) $ do
+    y <- AnArg <$> arg Z ix0
+    h <- arg (S Z) ix1 >>= force . AnArg
     zero <- AnId <$> lit (AnInteger 0)
-    AnId <$> app' f [zero]
+    hy <- app' h [y]
+    AnId hy #== zero
+  f <- lam (Comp0 $ intT :--:> ReturnT boolT) $ do
+    justHandler <- lazyLam (Comp0 $ tyvar (S (S Z)) ix0 :--:> ReturnT boolT) $ do
+      AnId <$> lit (ABoolean False)
+    nothingHandler <- lazyLam (Comp0 $ ReturnT boolT) $ do
+      AnId <$> lit (ABoolean False)
+    x <- AnArg <$> arg (S Z) ix0
+    m <- ctor' "Maybe" "Just" [x]
+    AnId <$> match (AnId m) [AnId justHandler, AnId nothingHandler]
+  zero <- AnId <$> lit (AnInteger 0)
+  AnId <$> app' f [zero]
   where
     rigidBinderTy :: CompT AbstractTy
     rigidBinderTy =
-        Comp1 $
-            tyvar Z ix0
-                :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT intT)
-                :--:> ReturnT boolT
+      Comp1 $
+        tyvar Z ix0
+          :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT intT)
+          :--:> ReturnT boolT

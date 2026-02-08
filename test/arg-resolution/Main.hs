@@ -1,20 +1,4 @@
-{-# LANGUAGE OverloadedLists #-}
-
 module Main (main) where
-
-import Covenant.ASG (ASG (ASG), ASGBuilder, CovenantError, Id, Ref (AnArg, AnId), app', arg, builtin2, lam, lit, runASGBuilder)
-import Covenant.Constant (AConstant (AnInteger))
-import Covenant.DeBruijn (DeBruijn (Z))
-import Covenant.ExtendedASG (wrapASG)
-import Covenant.Index (ix0, ix1)
-import Covenant.Prim (TwoArgFunc (AddInteger, MultiplyInteger))
-import Covenant.Test (Id (UnsafeMkId), conformanceDatatypes2, unsafeMkDatatypeInfos)
-import Covenant.Type (AbstractTy, BuiltinFlatT (BoolT, IntegerT), CompT (Comp0), CompTBody (ReturnT, (:--:>)), ValT (BuiltinFlat))
-import Data.Map qualified as M
-import Data.Vector (Vector)
-import PlutusCore (Name (Name), Unique (Unique), unUnique, _nameText, _nameUnique)
-import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.HUnit (assertEqual, testCase)
 
 main :: IO ()
 main = pure ()
