@@ -28,13 +28,15 @@ import Covenant.ArgDict (crudePrettyASG')
 import Covenant.MockPlutus (PlutusTerm, pBuiltin)
 import Covenant.Prim (OneArgFunc (..))
 import Covenant.Transform.Common
-import Covenant.Transform.Pipeline.Common
+import Covenant.Transform.Pipeline.Common hiding (traceM)
 import Covenant.Transform.Pipeline.ElimTyFixers (transformTypeFixerNodes)
 import Covenant.Transform.Pipeline.FirstPass (firstPass)
 import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)
 import Covenant.Transform.Pipeline.Monad (CodeGen, Datatypes (Datatypes), initRepPolyHandlers, runPass, runPassNoErrors)
 import Covenant.Transform.Pipeline.ResolveRepPoly (resolveRepPoly)
 import Covenant.Type
+
+import Debug.Trace
 
 transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
 transformASG dtDict = do

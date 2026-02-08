@@ -128,9 +128,3 @@ analyzeListTy dtDict valT = case decideUniType dtDict valT of
             Nothing -> Just (0, MkUniProof t)
             Just (acc, t') -> Just (1 + acc, t')
         other -> Nothing
-
--- Use this with the ARGUMENT TO `List` (not the whole List type)
-properlyTypedEmptyListForAnUntypedLanguage :: Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> Maybe PlutusTerm
-properlyTypedEmptyListForAnUntypedLanguage dtDict val = do
-    MkUniProof p <- decideUniType dtDict val
-    pure $ mkConstantOf () (DefaultUniApply DefaultUniProtoList p) []

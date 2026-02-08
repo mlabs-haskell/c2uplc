@@ -5,10 +5,11 @@ import Control.Monad.State.Strict
 
 import Control.Monad.Except (ExceptT (ExceptT), MonadError (throwError), runExceptT)
 import Control.Monad.Trans.Except (ExceptT)
-import Covenant.CodeGen.Stubs
+import Covenant.ArgDict (pValT)
+import Covenant.CodeGen.Stubs hiding (traceM)
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG
-import Covenant.MockPlutus (PlutusTerm)
+import Covenant.MockPlutus (PlutusTerm, prettyPTerm)
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
@@ -18,6 +19,8 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Void (Void, absurd)
+
+import Debug.Trace (traceM)
 
 {- I need some kind of unifying abstraction for all the transformation passes here.
 
@@ -182,10 +185,17 @@ selectHandlerId ::
 selectHandlerId (Datatypes dtDict) htype valT = do
     (RepPolyHandlers byId byType _) <- get
     case M.lookup (valT, htype) byType of
-        Just i -> pure i
+        Just i -> do
+            let msg = "\nselectHandlerId (found in cxt) " <> show htype <> " " <> pValT valT <> " = " <> show i
+            traceM msg
+            pure i
         Nothing ->
             trySelectHandler dtDict htype valT >>= \case
-                Nothing -> stubId "id"
+                Nothing -> do
+                    idenId <- stubId "id"
+                    let msg = "\nselectHandlerId (IDENTITY) " <> show htype <> " " <> pValT valT <> " = " <> show idenId
+                    traceM msg
+                    pure idenId
                 Just aHandler -> do
                     eid <- case htype of
                         Proj -> projectionId
@@ -197,6 +207,8 @@ selectHandlerId (Datatypes dtDict) htype valT = do
                                 (M.insert (valT, htype) i byType')
                                 nilFixers
                     modify' updF
+                    let msg = "\nselectHandlerId (NEW BIND) " <> show htype <> " " <> pValT valT <> " = " <> show i <> "\n  " <> show (prettyPTerm aHandler)
+                    traceM msg
                     pure i
 
 {- This just notes that a given node is a type fixing node for Nil.

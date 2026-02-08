@@ -100,13 +100,14 @@ elimListTest = do
     fCons <- pFreshLam2' "x" "xs" $ \x _xs -> pure x
     pure $ elim # fCons # i 0 # depth0Ints
 
+{-
 testProjList :: (MonadASG m) => ValT AbstractTy -> PlutusTerm -> StubM m PlutusTerm
 testProjList listType listTerm = do
     projIntF <- projInt
     projListWithType onlyList listType projIntF
     projListF <- getListProj onlyList (BuiltinFlat IntegerT)
     pure $ projListF # listTerm
-
+-}
 depth1Ints :: PlutusTerm
 depth1Ints = mkConstant @[[Integer]] () [[1, 2, 3], [4], [5, 6]]
 

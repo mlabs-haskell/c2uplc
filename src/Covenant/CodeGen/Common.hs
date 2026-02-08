@@ -85,7 +85,7 @@ import Covenant.ArgDict (pCompT)
 
 import Control.Monad.Except (runExceptT)
 import Control.Monad.State (State, execState, runState)
-import Covenant.CodeGen.Stubs (StubError, mkNil, resolveStub)
+import Covenant.CodeGen.Stubs (StubError, mkNil, resolveStub, stubId)
 import Covenant.ExtendedASG (ExtendedASG, ExtendedId (..), MonadASG (getASG), extendedNodes, forgetExtendedId, unExtendedASG)
 import Covenant.JSON (CompilationUnit)
 import Covenant.Prim (OneArgFunc (..), TwoArgFunc (..))
@@ -102,15 +102,15 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Traversable (forM)
 
--- import Debug.Trace (traceM)
+import Debug.Trace (traceM)
 import GHC.TypeLits (Symbol)
 import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
 import Prettyprinter
 import UntypedPlutusCore (Unique (Unique))
 
-traceM :: forall m. (Monad m) => String -> m ()
-traceM _ = pure ()
+-- traceM :: forall m. (Monad m) => String -> m ()
+-- traceM _ = pure ()
 
 {- Since we're switching to top-down compilation, this has to work a little differently.
 
@@ -226,8 +226,9 @@ checkNilFixer :: Id -> CodeGenM Bool
 checkNilFixer i = do
     CodeGenContext r <- ask
     let RepPolyHandlers _ _ nilFixers = r R..! #repPolyHandlers
-    withLocation i $ \astRef -> pure $ astRef `S.member` nilFixers
-
+        nilFixerIds = S.fromList . map (\(ASTRef _ _ rId) -> rId) . S.toList $ nilFixers
+    -- withLocation i $ \astRef -> pure $ astRef `S.member` nilFixers
+    pure $ i `S.member` nilFixerIds
 lookupVar :: Id -> CodeGenM (Maybe PlutusTerm)
 lookupVar i = do
     CodeGenContext r <- ask
@@ -384,7 +385,14 @@ nodeOrVar i =
                     Nothing -> do
                         tyFixers <- getTyFixers
                         case M.lookup i tyFixers of
-                            Nothing -> error $ "No node or synthetic var info for: " <> show i
+                            Nothing -> do
+                                -- `id` is *kind of* a projection / embedding handler but we can't actually
+                                -- put it in the RepPolyHandlers thing because it doesn't have a "base type"
+                                -- so we have to catch it here
+                                idenId <- stubId "id"
+                                if i == idenId
+                                    then Left <$> resolveStub "id"
+                                    else error $ "No node or synthetic var info for: " <> show i
                             Just tyFixer ->
                                 error $
                                     "Somehow something tried to resolve Id "
@@ -425,7 +433,11 @@ compileTopDown nodeId =
                                 Just (BuiltinTyFixer _ biTyFixer) -> do
                                     biFixer <- compileBIFixer biTyFixer
                                     args <- traverse compileRef argRefs
-                                    pure $ foldl' pApp biFixer args
+                                    if biNeedsDelay biTyFixer
+                                        then do
+                                            pure . pDelay $ foldl' pApp biFixer args
+                                        else do
+                                            pure $ foldl' pApp biFixer args
                                 _other -> do
                                     fn <- compileTopDown fnId
                                     args <- traverse compileRef argRefs
@@ -436,7 +448,20 @@ compileTopDown nodeId =
     compileRef :: Ref -> CodeGenM PlutusTerm
     compileRef r =
         traceM ("COMPILE REF: " <> show r) >> case r of
-            AnId i -> compileTopDown i
+            AnId i -> do
+                -- we have to check here for "nil-fixer-ness", I think?
+                isNilFixer <- checkNilFixer i
+                if isNilFixer
+                    then
+                        nodeOrVar i >>= \case
+                            Right (AValNode _ (App fn argRefs _ fnTy)) -> do
+                                let CompN _ (ArgsAndResult _ listTy) = fnTy
+                                mkNil mempty listTy >>= \case
+                                    Nothing -> throwError $ InvalidNilTy listTy
+                                    Just myNil -> pure myNil
+                            _ -> error "non-app node marked as nil fixer"
+                    else do
+                        compileTopDown i
             AnArg arg -> pVar <$> resolveArg arg
 
     -- we can't do Nil w/ just this information so we catch it above
@@ -447,6 +472,7 @@ compileTopDown nodeId =
         Data_I -> pure $ pBuiltin IData
         Data_B -> pure $ pBuiltin BData
         Data_List -> pure $ pBuiltin ListData
+        Data_Map -> pure $ pBuiltin MapData
         Data_Constr -> pure $ pBuiltin ConstrData
         Pair_Pair -> resolveStub "Pair"
         Map_Map -> resolveStub "id"
@@ -456,7 +482,7 @@ compileTopDown nodeId =
         ByteString_Cata -> resolveStub "cataByteString"
         List_Match -> resolveStub "matchList"
         Pair_Match -> resolveStub "matchPair"
-        Map_Match -> pFreshLam2 $ \xs f -> pure $ f # xs
+        Map_Match -> pFreshLam2 $ \xs f -> pure $ pForce f # xs
         Data_Match -> resolveStub "matchData"
 
     withLocalBinds :: Map Id ASGNode -> CodeGenM PlutusTerm -> CodeGenM PlutusTerm
@@ -473,6 +499,61 @@ compileTopDown nodeId =
             doBind :: Id -> Name -> CodeGenContext -> CodeGenContext
             doBind thisId thisName (CodeGenContext r) =
                 CodeGenContext $ rModify (M.insert thisId (pVar thisName)) #termScope r
+
+{- -Used to tell us whether we need a `Delay`.
+
+    Builtins that substitute in for Covenant-level ADT constructors
+    do not magically delay the result of their own application the way that
+    intro forms for user-defined ADTs do. (See the intro form generation machinery in
+    Covenant.Transform.Intro for what I mean by that)
+
+    This means that we end up with something like `Force (MkCons 1 [])`, which gives us this *incredibly*
+    useful error message during evaluation:
+
+      Eval Exception: An error has occurred:
+        Attempted to instantiate a non-polymorphic term.
+          Caused by: [1]
+          Logs: []
+
+    So we need to know which builtin type fixers "count as constructors". Note that here
+    (as is the case basically everywher else), `Nil` is handled specially in that we "catch"
+    occurrences of `Nil` at the node which *determines the type of the empty list*, which will never be
+    a an application node with a `Nil` constructors.
+
+    TODO: We should actually just handle nil specially in the Covenant repo and provide a special
+          helper function for it so that we don't have to do this. This would all be a lot easier and less
+          fragile if we didn't have to deduce that something is a `Nil` node. As things stand now I am not sure
+          whether "rigid chains" totally break the current implementation, and I am not sure how to fix that
+          given the current limitation.
+-}
+biNeedsDelay :: BuiltinFnData -> Bool
+biNeedsDelay = \case
+    -- Cons needs it
+    List_Cons -> True
+    -- We should never encounter a List_Nil during codegen, if we do something failed and the compiler has a
+    -- very serious bug. Because we "catch" the App that fixes Nil's type, it ends up "forced" already (we just generate the empty list we
+    -- need directly)
+    List_Nil -> error "If we've called biNeedsDelay on List_Nil then things are already hopelessly broken. Report this to compiler authors."
+    -- All constructors f Data need it
+    Data_I -> True
+    Data_B -> True
+    Data_List -> True
+    Data_Map -> True
+    Data_Constr -> True
+    -- Pair does not because it's stub handles this (in a similar way to a the ctor fn for a user ADT)
+    Pair_Pair -> False
+    -- Map does need it (I think?) because the `Map` constructor just compiles to `id`
+    -- (i.e. it's kind of a "newtype" w/r/t intro-form-ed-ness)
+    Map_Map -> True
+    -- No match functions or catamorphisms need it
+    Integer_Nat_Cata -> False
+    Integer_Neg_Cata -> False
+    List_Cata -> False
+    ByteString_Cata -> False
+    List_Match -> False
+    Pair_Match -> False
+    Map_Match -> False
+    Data_Match -> False
 
 litToTerm :: AConstant -> CodeGenM PlutusTerm
 litToTerm = \case
@@ -547,7 +628,10 @@ getBindableSubTerms dbOffset = \case
         goRef :: Int -> Ref -> CodeGenM (Map Id ASGNode)
         goRef dbDist r = case r of
             AnArg{} -> pure M.empty
-            AnId childId -> go dbDist childId
+            AnId childId ->
+                alreadyCompiled childId >>= \case
+                    True -> pure mempty
+                    False -> go dbDist childId
 
     alreadyCompiled :: Id -> CodeGenM Bool
     alreadyCompiled i = do

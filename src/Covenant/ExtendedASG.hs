@@ -203,7 +203,7 @@ pattern WrappedSrc :: Id -> ExtendedId
 pattern WrappedSrc i <- WrappedSrcId i
 
 pattern IdentityFn :: Id -> ExtendedId
-pattern IdentityFn i <- IdentityFnId i
+pattern IdentityFn i = IdentityFnId i
 
 pattern EphemeralError :: Id -> ExtendedId
 pattern EphemeralError i = EphemeralErrorId i

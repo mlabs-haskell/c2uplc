@@ -53,6 +53,8 @@ import Data.Text qualified as T
 import Data.Wedge (Wedge (..))
 
 -- import Debug.Trace (traceM)
+
+import Data.Vector qualified as Vector
 import PlutusCore.Data (Data (Constr, I, List))
 import PlutusCore.Default (DefaultUni (..), Esc)
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
@@ -136,6 +138,7 @@ defStubs = do
     _cataNat
     _cataNeg
     _cataByteString
+    _cataList
     -- Match drivers
     _matchList
     _matchData
@@ -196,15 +199,16 @@ _cataByteString = declare "cataByteString" $ do
                     )
 
 --
-_cataList :: forall m. (MonadASG m) => StubM m ()
+_cataList :: forall m. (MonadStub m) => m ()
 _cataList = declare "cataList" $ do
     fix <- resolveStub "fix"
     elim <- resolveStub "elimList"
-    body <- pFreshLam $ \self ->
-        pFreshLam3 $ \xs f z -> do
-            goCons <- pFreshLam2 $ \y ys -> pure $ self # (f # y # z) # ys
-            pure $ elim # goCons # z # xs
-    pure $ fix # body
+    body <- pFreshLam' "self" $ \self ->
+        pFreshLam3' "xs" "whenNil" "whenCons" $ \xs whenNil whenCons -> do
+            whenCons' <- pFreshLam2' "y" "ys" $ \y ys -> pure $ whenCons # (self # ys # whenNil # whenCons) # y
+            pure $ pCase xs [whenCons', whenNil]
+    -- to force the handler thunk though TODO we should really just de-thunk in the ASG
+    pFreshLam3 $ \xs whenNil whenCons -> pure $ (fix # body) # xs # whenNil # pForce whenCons
 
 {- **************************
    Hard-coded Intro (Constructor) Functions
@@ -220,13 +224,24 @@ _cataList = declare "cataList" $ do
   we cannot construct a builtin list of elements of that type.
 -}
 mkNil :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m (Maybe PlutusTerm)
-mkNil dtDict valT = case analyzeListTy dtDict valT of
-    Nothing -> pure Nothing
-    Just (depth, MkUniProof uni) -> do
-        let selectNilNm = selectNilName uni
-        mkSelectNil uni
+mkNil dtDict valT
+    | listOfPairs valT = do
+        let selectNilNm = selectNilName pairData
+        mkSelectNil pairData
         selectNil <- resolveStub selectNilNm
-        pure . Just $ selectNil # i depth
+        pure . Just $ selectNil # i 0
+    | otherwise = case analyzeListTy dtDict valT of
+        Nothing -> pure Nothing
+        Just (depth, MkUniProof uni) -> do
+            let selectNilNm = selectNilName uni
+            mkSelectNil uni
+            selectNil <- resolveStub selectNilNm
+            pure . Just $ selectNil # i depth
+  where
+    listOfPairs (Datatype "List" args) = case args Vector.! 0 of
+        Datatype "Pair" _ -> True
+        _ -> False
+    listOfPairs _ = False
 
 nilName :: forall (a :: Type). DefaultUni (Esc a) -> Text
 nilName w = "selectNil[" <> T.pack (show w) <> "]"
@@ -236,7 +251,7 @@ _mkPair :: forall m. (MonadStub m) => m ()
 _mkPair = declare "Pair" $
     pFreshLam2' "a" "b" $ \a b ->
         pFreshLam2' "embedA" "embedB" $ \embedA embedB ->
-            pure $
+            pure . pDelay $
                 pBuiltin MkPairData
                     # (embedA # a)
                     # (embedB # b)
@@ -251,11 +266,11 @@ _mkPair = declare "Pair" $
 -}
 
 -- this is just elimList with the arg order swapped to conform with the ctor order of our List decl
--- List a -> r -> (a -> r) -> r
+-- List a -> r -> <a -> r> -> r
 _matchList :: forall m. (MonadStub m) => m ()
 _matchList = declare "matchList" $ pFreshLam3' "xs" "goNil" "goCons" $ \xs goNil goCons -> do
     elim <- resolveStub "elimList"
-    pure $ elim # goCons # goNil # xs
+    pure $ elim # pForce goCons # goNil # xs
 
 _matchData :: forall m. (MonadStub m) => m ()
 _matchData = declare "matchData" $
@@ -266,17 +281,17 @@ _matchData = declare "matchData" $
                 pBuiltin ChooseData
                     # dat
                     # goCtor'
-                    # (goMap # (pBuiltin UnMapData # dat))
-                    # (goList # (pBuiltin UnListData # dat))
-                    # (goI # (pBuiltin UnIData # dat))
-                    # (goB # (pBuiltin UnBData # dat))
+                    # (pForce goMap # (pBuiltin UnMapData # dat))
+                    # (pForce goList # (pBuiltin UnListData # dat))
+                    # (pForce goI # (pBuiltin UnIData # dat))
+                    # (pForce goB # (pBuiltin UnBData # dat))
   where
     asCtor :: PlutusTerm -> PlutusTerm -> m PlutusTerm
     asCtor goCtor scrut = do
         pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
             let ctorIx = pFst scrutAsIntDataPair
                 ctorArgs = pSnd scrutAsIntDataPair
-            pure $ goCtor # ctorIx # ctorArgs
+            pure $ pForce goCtor # ctorIx # ctorArgs
 
 _matchPair :: forall m. (MonadStub m) => m ()
 _matchPair = declare "matchPair" $
@@ -284,7 +299,7 @@ _matchPair = declare "matchPair" $
         pFreshLam3' "f" "projA" "projB" $ \f projA projB -> do
             let a = pFst aPair
                 b = pSnd aPair
-            pure $ f # (projA # a) # (projB # b)
+            pure $ pForce f # (projA # a) # (projB # b)
 
 {- ************************
    Stub Monad
@@ -526,6 +541,8 @@ trySelectHandler dtDict htype valT = case valT of
                         projListWithType dtDict listTy projInner
                         Just <$> resolveStub (projListKey uni)
     _ -> pure Nothing
+  where
+    msg = "trySelectHandler " <> show htype <> " " <> pValT valT
 
 {-
    ***************************
@@ -642,17 +659,6 @@ projListWithType dtDict valT projEl = case analyzeListTy dtDict valT of
 
 projListKey :: forall (a :: Type). DefaultUni (Esc a) -> Text
 projListKey w = "projList[" <> T.pack (show w) <> "]"
-
--- The idea is that we'll do one pass where we generate them all and then in a later pass we use this to look
--- up things we expect to be generated.
-getListProj' :: forall m (a :: Type). (MonadStub m) => DefaultUni (Esc a) -> m PlutusTerm
-getListProj' w = resolveStub (projListKey w)
-
--- | TAKES THE BASE/INNERMOST TYPE, NOT THE FULL LIST TYPE
-getListProj :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m PlutusTerm
-getListProj dict valT = case decideUniType dict valT of
-    Nothing -> throwStubErr $ WitnessFail valT
-    Just (MkUniProof w) -> getListProj' w
 
 {- ***************************
    Map Projection / Embedding

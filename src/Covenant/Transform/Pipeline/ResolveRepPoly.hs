@@ -137,8 +137,11 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                 Data_I -> pure ()
                 Data_B -> pure ()
                 Data_Constr -> pure ()
+                Data_List -> pure ()
                 Data_Map -> pure ()
                 -- mkPair takes two embeddings we have to account for
+                -- NOTE: I think I was wrong and we just need to note the type here
+                --       (and then select the actual handler in the codegen pass)
                 Pair_Pair -> do
                     datatypes <- asks (R..! #datatypes)
                     let concreteA = vacuous $ concretifications M.! ix0
@@ -147,8 +150,14 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
                     embB <- AnId <$> selectHandlerId datatypes Embed concreteB
                     let newApp = AppInternal fn (args <> [embA, embB]) instTys cFunTy
                     eInsert appId $ AValNode rTy newApp
+                {-
+                let newCFunTy = cleanup $ substCompT vacuous (M.mapKeys (BoundAt Z) concretifications) compTy
+                    newApp = AppInternal fn args instTys newCFunTy
+                eInsert appId (AValNode rTy newApp)
+                -}
                 -- I THINK we don't need to do anything here?
-                Map_Map -> pure ()
+                Map_Map -> do
+                    pure ()
                 -- no projections or embeddings for any of the catas I think?
                 Integer_Nat_Cata -> pure ()
                 Integer_Neg_Cata -> pure ()

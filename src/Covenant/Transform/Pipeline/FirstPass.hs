@@ -65,6 +65,9 @@ firstPass = do
     uniqueErrorId <- stubId "error"
     let eid = EphemeralError uniqueErrorId
     eInsert eid AnError
+    identityStubId <- stubId "id"
+    let idNode = syntheticLamNode (UniqueError uniqueErrorId) (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0))
+    eInsert (IdentityFn identityStubId) idNode
     mapM_ (uncurry (bindPrimStub eid)) ((Proj,) <$> primTypes)
     mapM_ (uncurry (bindPrimStub eid)) ((Embed,) <$> primTypes)
   where

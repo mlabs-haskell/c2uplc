@@ -81,6 +81,7 @@ common test-lang
   import:        lang
   ghc-options:   -O2 -threaded -rtsopts -with-rtsopts=-N
   build-depends:
+    , bimap
     , c2uplc
     , containers              >=0.6.8    && <0.8
     , covenant                ==1.3.0

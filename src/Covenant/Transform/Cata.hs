@@ -240,23 +240,11 @@ builtinCataForm nm enc = case nm of
     listT :: ValT AbstractTy -> ValT AbstractTy
     listT t = dt "List" [t]
 
-    pairT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
-    pairT x y = dt "Pair" [x, y]
-
-    -- The ADT not the ctor of data
-    mapT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
-    mapT k v = dt "Map" [k, v]
-
-    intT = BuiltinFlat IntegerT
-    byteStringT = BuiltinFlat ByteStringT
-
     a = tyvar Z ix0
     b = tyvar Z ix1
-    c = tyvar Z ix2
 
     a' = tyvar (S Z) ix0
     b' = tyvar (S Z) ix1
-    c' = tyvar (S Z) ix2
 
     dt = Datatype
 
