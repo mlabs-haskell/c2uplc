@@ -37,7 +37,7 @@ import Covenant.ExtendedASG
     forgetExtendedId,
   )
 import Covenant.Index (intIndex)
-import Covenant.MockPlutus
+import Covenant.Plutus
   ( PlutusTerm,
     pApp,
     pBuiltin,

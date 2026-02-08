@@ -18,7 +18,7 @@ import Covenant.CodeGen.Stubs
   )
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG (MonadASG)
-import Covenant.MockPlutus
+import Covenant.Plutus
   ( PlutusTerm,
     pBuiltin,
     prettyPTerm,

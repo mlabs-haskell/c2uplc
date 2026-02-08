@@ -14,7 +14,7 @@ import Covenant.CodeGen.Common
   )
 import Covenant.ExtendedASG (wrapASG)
 import Covenant.JSON (CompilationUnit (CompilationUnit))
-import Covenant.MockPlutus (PlutusTerm)
+import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (unsafeMkDatatypeInfos)
 import Covenant.Transform (transformASG)
 import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes), runCodeGen)

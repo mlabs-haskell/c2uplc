@@ -31,7 +31,7 @@ import Covenant.ExtendedASG
     MonadASG (getASG, putASG),
   )
 import Covenant.Index (Index)
-import Covenant.MockPlutus (PlutusTerm, ppTerm)
+import Covenant.Plutus (PlutusTerm, ppTerm)
 import Covenant.Test (CompNodeInfo (LamInternal))
 import Covenant.Transform.Common
   ( TyFixerDataBundle,

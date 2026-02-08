@@ -53,7 +53,7 @@ import Covenant.ExtendedASG
     forgetExtendedId,
     projectionId,
   )
-import Covenant.MockPlutus (PlutusTerm, prettyPTerm)
+import Covenant.Plutus (PlutusTerm, prettyPTerm)
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)

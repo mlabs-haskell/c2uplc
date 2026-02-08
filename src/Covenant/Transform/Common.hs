@@ -42,7 +42,7 @@ import Covenant.ArgDict (pValT, pVec)
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.ExtendedASG (MonadASG, nextId)
 import Covenant.Index (Count, intCount, intIndex)
-import Covenant.MockPlutus
+import Covenant.Plutus
   ( PlutusTerm,
     pApp,
     pCase,

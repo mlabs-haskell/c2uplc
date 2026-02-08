@@ -41,7 +41,7 @@ import Covenant.ExtendedASG
     eInsert,
     runWithEmptyASG,
   )
-import Covenant.MockPlutus
+import Covenant.Plutus
   ( PlutusTerm,
     caseConstrEnum,
     pBuiltin,

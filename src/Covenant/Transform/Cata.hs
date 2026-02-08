@@ -12,7 +12,7 @@ import Covenant.CodeGen.Stubs (MonadStub)
 import Covenant.Data (DatatypeInfo (DatatypeInfo), mkCataFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z))
 import Covenant.Index (Count, intCount, intIndex, ix0, ix1)
-import Covenant.MockPlutus
+import Covenant.Plutus
   ( PlutusTerm,
     pApp,
     pCase,

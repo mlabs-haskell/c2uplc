@@ -38,7 +38,7 @@ import Covenant.Constant
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (count0, count1, ix0, ix1)
 import Covenant.JSON (CompilationUnit (CompilationUnit), Version (Version))
-import Covenant.MockPlutus (PlutusTerm, prettyPTerm)
+import Covenant.Plutus (PlutusTerm, prettyPTerm)
 import Covenant.Prim (TwoArgFunc (AddInteger))
 import Covenant.Test (ledgerTypes, list, unsafeMkDatatypeInfos)
 import Covenant.Type

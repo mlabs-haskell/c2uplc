@@ -4,7 +4,7 @@
 
 {- HLINT ignore "Use camelCase" -}
 
-module Covenant.MockPlutus
+module Covenant.Plutus
   ( PlutusTerm,
     pVar,
     pLam,

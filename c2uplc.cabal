@@ -128,7 +128,7 @@ library
     Covenant.CodeGen.Common
     Covenant.CodeGen.Stubs
     Covenant.ExtendedASG
-    Covenant.MockPlutus
+    Covenant.Plutus
     Covenant.Transform
     Covenant.Transform.Cata
     Covenant.Transform.Common
