@@ -13,7 +13,7 @@ import Covenant.CodeGen.Stubs
   ( StubM,
     compileStub',
     defStubs,
-    i,
+    pInt,
     resolveStub,
   )
 import Covenant.Data (DatatypeInfo)
@@ -86,7 +86,7 @@ elimListTest :: (MonadASG m) => StubM m PlutusTerm
 elimListTest = do
   elim <- resolveStub "elimList"
   fCons <- pFreshLam2' "x" "xs" $ \x _xs -> pure x
-  pure $ elim # fCons # i 0 # depth0Ints
+  pure $ elim # fCons # pInt 0 # depth0Ints
 
 {-
 testProjList :: (MonadASG m) => ValT AbstractTy -> PlutusTerm -> StubM m PlutusTerm
@@ -107,20 +107,20 @@ embedListTest :: (MonadASG m) => StubM m PlutusTerm
 embedListTest = do
   emb <- resolveStub "embedList"
   iDat <- pFreshLam $ \x -> pure $ pBuiltin IData # x
-  pure $ emb # i 0 # iDat # depth0Ints
+  pure $ emb # pInt 0 # iDat # depth0Ints
 
 mapTest :: (MonadASG m) => StubM m PlutusTerm
 mapTest = do
   mkMap <- resolveStub "map"
   let pmap = mkMap # mkConstant @[Integer] () []
-  subOne <- pFreshLam' "sub_x" $ \x -> pure $ x #- i 1
+  subOne <- pFreshLam' "sub_x" $ \x -> pure $ x #- pInt 1
   pure $ pmap # subOne # depth0Ints
 
 recListTest :: (MonadASG m) => StubM m PlutusTerm
 recListTest = do
   -- ([Int] -> Int) -> Int -> [Int] -> Int
   fCons <- pFreshLam3' "self" "x" "xs" $ \_ x _ -> pure x
-  fNil <- pFreshLam' "_xs" $ \_ -> pure (i 0)
+  fNil <- pFreshLam' "_xs" $ \_ -> pure (pInt 0)
   recList' <- resolveStub "recList"
   pure $ recList' # fCons # fNil # depth1Ints
 

@@ -14,7 +14,7 @@ module Covenant.CodeGen.Stubs
     compileStubM,
     defStubs,
     compileStub',
-    i,
+    pInt,
     stubId,
     trySelectHandler,
     resolveStub,
@@ -233,7 +233,7 @@ _cataNat = declare "cataNat" body
     body :: m PlutusTerm
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
       recNat <- resolveStub "recNat"
-      let nIsNegative = n #< i 0
+      let nIsNegative = n #< pInt 0
       pure $
         pIf
           nIsNegative
@@ -248,7 +248,7 @@ _cataNeg = declare "cataNeg" body
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
       pNot <- resolveStub "not"
       recNeg <- resolveStub "recNeg"
-      let nIsPositive = pNot # (n #<= i 0)
+      let nIsPositive = pNot # (n #<= pInt 0)
       pure $
         pIf
           nIsPositive
@@ -271,7 +271,7 @@ _cataByteString = declare "cataByteString" $ do
             whenEmpty
             ( whenNonEmpty
                 # (originalBS #! ix)
-                # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #+ i 1))
+                # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #+ pInt 1))
             )
 
 --
@@ -302,14 +302,14 @@ mkNil dtDict valT
       let selectNilNm = selectNilName pairData
       mkSelectNil pairData
       selectNil <- resolveStub selectNilNm
-      pure . Just $ selectNil # i 0
+      pure . Just $ selectNil # pInt 0
   | otherwise = case analyzeListTy dtDict valT of
       Nothing -> pure Nothing
       Just (depth, MkUniProof uni) -> do
         let selectNilNm = selectNilName uni
         mkSelectNil uni
         selectNil <- resolveStub selectNilNm
-        pure . Just $ selectNil # i depth
+        pure . Just $ selectNil # pInt depth
   where
     listOfPairs (Datatype "List" args) = case args Vector.! 0 of
       Datatype "Pair" _ -> True
@@ -498,7 +498,7 @@ resolveStub nmTxt = do
 
 -- sometimes we just need the Id (e.g. for constructing asg nodes)
 stubId :: (MonadStub m) => Text -> m Id
-stubId nm = stubData nm >>= \case (_, _, i') -> pure i'
+stubId nm = stubData nm >>= \case (_, _, i) -> pure i
 
 runStubM :: forall m a. (MonadASG m) => StubM m () -> StubM m a -> m (Either StubError (StubContext, a))
 runStubM (StubM scope) (StubM act') = do
@@ -593,7 +593,7 @@ trySelectHandler dtDict htype valT = case valT of
           Nothing -> pure Nothing -- probably should be an error
           Just embedInner -> do
             embedList <- resolveStub "embedList"
-            pure . Just $ embedList # i depth # embedInner
+            pure . Just $ embedList # pInt depth # embedInner
       Proj -> do
         let innerTy = unsafeReflect uni
         trySelectHandler dtDict htype innerTy >>= \case
@@ -746,7 +746,7 @@ _projPair = declare "projPair" $ pFreshLam' "dataPair" $ \dataPair -> do
 
 _embedPair :: forall m. (MonadStub m) => m ()
 _embedPair = declare "embedPair" $ pFreshLam' "aPair" $ \dataPair -> do
-  pure $ pBuiltin ConstrData # i 0 # pCons (pFst dataPair) (pCons (pSnd dataPair) pNilData)
+  pure $ pBuiltin ConstrData # pInt 0 # pCons (pFst dataPair) (pCons (pSnd dataPair) pNilData)
 
 --   Bool Projection / Embedding
 --   ***************************
@@ -837,8 +837,8 @@ _id = declare "id" $ pFreshLam $ \x -> pure x
 _error :: (MonadStub m) => m ()
 _error = do
   declare "error" $ pure (mkConstant () ())
-  (_, _, i') <- stubData "error"
-  eInsert (EphemeralError i') AnError
+  (_, _, i) <- stubData "error"
+  eInsert (EphemeralError i) AnError
 
 -- We aren't putting the unique error here because it needs to be removed anyway and nothing
 -- at the PLC level depends upon it (it's a trick for mocking functions in the ASG)
@@ -876,8 +876,8 @@ _recNat = declare "recNat" $ do
   pure $ fix # body
   where
     go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-      let isZero = n #<= i 0
-      pure $ pIf isZero whenZ (whenS # (self # whenZ # whenS # (n #- i 1)))
+      let isZero = n #<= pInt 0
+      pure $ pIf isZero whenZ (whenS # (self # whenZ # whenS # (n #- pInt 1)))
 
 --  r -> (r -> Integer -> r) ->  Integer -> r
 _recNatN :: (MonadStub m) => m ()
@@ -887,9 +887,9 @@ _recNatN = declare "recNatN" $ do
   pure $ fix # body
   where
     go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-      let isZero = n #== i 0
+      let isZero = n #== pInt 0
           whenS' = whenS # n
-      pure $ pIf isZero whenZ (whenS' # (self # whenZ # whenS # (n #- i 1)))
+      pure $ pIf isZero whenZ (whenS' # (self # whenZ # whenS # (n #- pInt 1)))
 
 _recNeg :: (MonadStub m) => m ()
 _recNeg = declare "recNeg" $ do
@@ -898,12 +898,12 @@ _recNeg = declare "recNeg" $ do
   pure $ fix # body
   where
     go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-      let isZero = n #== i 0
+      let isZero = n #== pInt 0
       pure $
         pIf
           isZero
           whenZ
-          (whenS # (self # whenZ # whenS # (n #+ i 1)))
+          (whenS # (self # whenZ # whenS # (n #+ pInt 1)))
 
 {-
     ***************
@@ -1033,5 +1033,5 @@ _or = declare "or" $ pFreshLam2 $ \b1 b2 ->
     *************
 -}
 
-i :: Integer -> PlutusTerm
-i = mkConstant ()
+pInt :: Integer -> PlutusTerm
+pInt = mkConstant ()
