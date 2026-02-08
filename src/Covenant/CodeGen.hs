@@ -1,17 +1,20 @@
-module Covenant.CodeGen (compile, compileIO, evalTerm, compilePretty, CodeGenError) where
+module Covenant.CodeGen
+  ( compile,
+    evalTerm,
+    compilePretty,
+    CodeGenError,
+  )
+where
 
 -- N.B. *WE* have two different things called `ConstrData`
 
-import Codec.Extras.SerialiseViaFlat (SerialiseViaFlat (SerialiseViaFlat))
-import Codec.Serialise (writeFileSerialise)
-import Control.Exception (throwIO)
 import Covenant.CodeGen.Common
   ( CodeGenError (WrapStubError),
     runTopDownCompile,
   )
 import Covenant.ExtendedASG (wrapASG)
-import Covenant.JSON (CompilationUnit (CompilationUnit), deserializeCompilationUnit)
-import Covenant.MockPlutus (PlutusTerm, prettyPTerm)
+import Covenant.JSON (CompilationUnit (CompilationUnit))
+import Covenant.MockPlutus (PlutusTerm)
 import Covenant.Test (unsafeMkDatatypeInfos)
 import Covenant.Transform (transformASG)
 import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes), runCodeGen)
@@ -23,7 +26,6 @@ import PlutusCore (Name)
 import PlutusCore qualified as PLC
 import PlutusCore.Evaluation.Machine.ExBudgetingDefaults (defaultCekParametersForTesting)
 import Prettyprinter (Doc, pretty)
-import UntypedPlutusCore qualified as UPLC
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
 
 compilePretty ::
@@ -44,47 +46,6 @@ compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runC
   where
     datatypes :: Datatypes
     datatypes = Datatypes $ unsafeMkDatatypeInfos (Vector.toList datatypesRaw)
-
-compileIO :: FilePath -> IO ()
-compileIO path = do
-  putStrLn $ "Attempting to compile compilation unit at: " <> path <> "..."
-  cu <- deserializeCompilationUnit path
-  putStrLn "Compilation unit successfully deserialized and validated."
-  putStrLn "Attempting to generate UPLC code..."
-  case compile cu of
-    Left cgErr -> throwIO . userError $ "Code generation failed\nReason: " <> show cgErr
-    Right aTerm -> do
-      putStrLn "Code generation succeeded!"
-      putStrLn "Raw Script:"
-      print aTerm
-      putStrLn ""
-      putStrLn "Pretty Script:"
-      print (prettyPTerm aTerm)
-      putStrLn ""
-      putStrLn "Attempting to pre-evaluate result (reduces script size / optimizes code / catches simple mistakes)..."
-      case evalTerm aTerm of
-        Left plcErr -> do
-          putStrLn "Evaluation failed :-("
-          putStrLn "  Reason:"
-          putStrLn plcErr
-        Right evalResult -> do
-          putStrLn "Evaluation succeeded!"
-          putStrLn "Raw evaluated script:"
-          print evalResult
-          putStrLn "Pretty evaluated script:"
-          print (prettyPTerm evalResult)
-          putStrLn "Writing output to: ./SCRIPT.plc"
-          serializePlc "SCRIPT.plc" evalResult
-
-serializePlc ::
-  FilePath ->
-  PlutusTerm ->
-  IO ()
-serializePlc path =
-  writeFileSerialise path
-    . SerialiseViaFlat
-    . UPLC.UnrestrictedProgram
-    . UPLC.Program () PLC.latestVersion
 
 -----------------------------------
 
