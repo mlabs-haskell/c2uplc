@@ -59,7 +59,6 @@ import Covenant.Transform.Common
       ),
     TyFixerFnData (BuiltinTyFixer, TyFixerFnData),
     TyFixerNodeKind (CataNode, IntroNode, MatchNode),
-    TypeSchema (DataSchema, SOPSchema),
   )
 import Covenant.Transform.Pipeline.Common
   ( ConcretifyCxt,
@@ -72,6 +71,7 @@ import Covenant.Transform.Pipeline.Monad
     noteNilFixer,
     selectHandlerId,
   )
+import Covenant.Transform.Schema (TypeSchema (DataSchema, SOPSchema))
 import Covenant.Transform.TyUtils
   ( AppId (AppId),
     LambdaId (LambdaId),

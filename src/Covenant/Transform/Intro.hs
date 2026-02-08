@@ -45,10 +45,8 @@ import Covenant.Transform.Common
         mfTypeSchema
       ),
     TyFixerNodeKind (IntroNode),
-    TypeSchema (DataSchema, SOPSchema),
     countToTyVars,
     genLambdaArgNames,
-    mkTypeSchema,
   )
 import Covenant.Transform.Pipeline.Common
   ( lookupDatatypeInfo,
@@ -57,6 +55,10 @@ import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad
   ( Datatypes,
     RepPolyHandlers,
+  )
+import Covenant.Transform.Schema
+  ( TypeSchema (DataSchema, SOPSchema),
+    mkTypeSchema,
   )
 import Covenant.Type
   ( AbstractTy,

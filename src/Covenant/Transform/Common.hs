@@ -30,11 +30,6 @@ module Covenant.Transform.Common
     genFiniteListEliminator,
     pCaseConstrData,
     BuiltinFnData (..),
-    -- re-exports from Schema
-    TypeSchema (..),
-    schemaFnArgs,
-    schemaFnType,
-    mkTypeSchema,
   )
 where
 
@@ -55,12 +50,7 @@ import Covenant.Plutus
     (#),
   )
 import Covenant.Test (Id (UnsafeMkId))
-import Covenant.Transform.Schema
-  ( TypeSchema (DataSchema, SOPSchema),
-    mkTypeSchema,
-    schemaFnArgs,
-    schemaFnType,
-  )
+import Covenant.Transform.Schema (TypeSchema)
 import Covenant.Type
   ( AbstractTy (BoundAt),
     CompT (CompN),

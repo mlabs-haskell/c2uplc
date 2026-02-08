@@ -34,14 +34,11 @@ import Covenant.Transform.Common
         mfTypeSchema
       ),
     TyFixerNodeKind (CataNode),
-    TypeSchema (DataSchema, SOPSchema),
     countToTyVars,
     freshNamePrefix,
     genLambdaArgNames,
-    mkTypeSchema,
     pCaseConstrData,
     pFix,
-    schemaFnType,
     unsafeUnThunk,
   )
 import Covenant.Transform.Pipeline.Common
@@ -51,6 +48,11 @@ import Covenant.Transform.Pipeline.Common
 import Covenant.Transform.Pipeline.Monad
   ( Datatypes,
     RepPolyHandlers,
+  )
+import Covenant.Transform.Schema
+  ( TypeSchema (DataSchema, SOPSchema),
+    mkTypeSchema,
+    schemaFnType,
   )
 import Covenant.Type
   ( AbstractTy (BoundAt),
