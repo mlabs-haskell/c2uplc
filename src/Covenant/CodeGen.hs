@@ -59,7 +59,8 @@ evalTerm t = case errOrRes of
   Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log'
   Right res -> pure res
   where
-    (errOrRes, log') = evalTerm' t
+    _result :: (Either (Cek.CekEvaluationException Name DefaultUni DefaultFun) (Term Name DefaultUni DefaultFun ()), [Text])
+    _result@(errOrRes, log') = evalTerm' t
 
 -- no budget, don't care yet
 evalTerm' ::

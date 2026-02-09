@@ -84,7 +84,6 @@ transformTypeFixerNodes = do
     conjureFunction compT = do
       errId <- stubId "error"
       pure $ syntheticLamNode (UniqueError errId) compT
-
     resolveCtorIx :: TyName -> ConstructorName -> m (Maybe Int)
     resolveCtorIx tn cn = do
       dtInfo <- (\(Datatypes x) -> x M.! tn) <$> ask
@@ -104,13 +103,11 @@ transformTypeFixerNodes = do
             Just plutusDataCtor ->
               pure $ Vector.findIndex (== plutusDataCtor) (Vector.fromList . Set.toList $ ctors)
         DataDeclaration _ _ ctors _ -> pure $ Vector.findIndex (\(Constructor cNm' _) -> cNm' == cn) ctors
-
     -- this should only be used in contexts where we must have a datatype (e.g. scrutinees in matches and catas, parts of generated functions)
     unsafeDatatypeName :: ValT AbstractTy -> TyName
     unsafeDatatypeName = \case
       Datatype tn _ -> tn
       other -> error $ "unsafeDatatypeName called on non-datatype ValT: " <> show other
-
     -- only use this on things that have to be a value type (i.e. scrutinees)
     unsafeRefType :: Ref -> m (ValT AbstractTy)
     unsafeRefType = \case
@@ -119,16 +116,13 @@ transformTypeFixerNodes = do
         eNodeAt i >>= \node -> case typeASGNode node of
           ValNodeType ty -> pure ty
           other -> error $ "UnsafeRefType called on an Id with a non-ValT type: " <> show other
-
     alreadyVisited :: ExtendedId -> m Bool
     alreadyVisited i = S.member i <$> gets (R..! #visited)
-
     insertAndMarkVisited :: ExtendedId -> ASGNode -> m ()
     insertAndMarkVisited eid node = do
       eInsert eid node
       oldVisited <- gets (R..! #visited)
       modify' $ R.update #visited (S.insert eid oldVisited)
-
     go :: ExtendedId -> m ()
     go i =
       alreadyVisited i >>= \case

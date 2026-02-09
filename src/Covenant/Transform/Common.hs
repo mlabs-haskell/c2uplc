@@ -349,7 +349,6 @@ countToTyVars cnt
   where
     cntI :: Int
     cntI = review intCount cnt
-
     mkTV :: Int -> ValT AbstractTy
     mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
 

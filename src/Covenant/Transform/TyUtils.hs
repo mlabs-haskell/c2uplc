@@ -118,12 +118,10 @@ applyArgs polyFun@(CompN cnt (ArgsAndResult fnSigArgs _)) args = cleanup concret
   where
     vars :: [AbstractTy]
     vars = Vector.toList $ countToAbstractions cnt
-
     instantiations :: Map AbstractTy (ValT AbstractTy)
     instantiations =
       flip runReader 0 $
         getInstantiations vars (Vector.toList fnSigArgs) args
-
     concreteFn :: CompT AbstractTy
     concreteFn = substCompT id instantiations polyFun
 
@@ -134,13 +132,10 @@ cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id subs
   where
     newCount :: Count "tyvar"
     newCount = fromJust . preview intCount $ Vector.length remainingLocalVars
-
     fnSig :: Vector (ValT AbstractTy)
     fnSig = Vector.snoc args result
-
     allOriginalVars :: Set AbstractTy
     allOriginalVars = Set.fromList . Vector.toList $ countToAbstractions cnt
-
     substitutions :: Map AbstractTy (ValT AbstractTy)
     substitutions =
       Vector.ifoldl'
@@ -151,7 +146,6 @@ cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id subs
         )
         M.empty
         remainingLocalVars
-
     remainingLocalVars :: Vector AbstractTy
     remainingLocalVars =
       Vector.fromList
@@ -161,7 +155,6 @@ cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id subs
         . traverse collectLocalVars
         . Vector.toList
         $ fnSig
-
     collectLocalVars :: ValT AbstractTy -> Reader Int (Set AbstractTy)
     collectLocalVars = \case
       Abstraction a -> do
@@ -183,6 +176,7 @@ substCompT ::
   CompT AbstractTy
 substCompT f dict (CompN cnt (compTBodyToVec -> bodyVec)) = CompN cnt (vecToCompTBody subbed) -- NOTE: COUNT WILL BE WRONG (I don't think it matters)
   where
+    subbed :: Vector (ValT AbstractTy)
     subbed = (\vt -> runReader (substitute f dict vt) 0) <$> bodyVec
 
 -- the extra function arg lets this work with either AbstractTy or Void (which might be useful for us)
@@ -211,7 +205,6 @@ countToTyVars cnt
   where
     cntI :: Int
     cntI = review intCount cnt
-
     mkTV :: Int -> ValT AbstractTy
     mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
 
@@ -222,7 +215,6 @@ countToAbstractions cnt
   where
     cntI :: Int
     cntI = review intCount cnt
-
     mkTV :: Int -> AbstractTy
     mkTV = BoundAt Z . fromJust . preview intIndex
 
@@ -262,7 +254,6 @@ instantiates var concrete abstract = case (concrete, abstract) of
     sameVar varA varB = do
       varB' <- resolveVar varB
       pure $ varA == varB'
-
     go :: [ValT AbstractTy] -> [ValT AbstractTy] -> Reader Int (Maybe (ValT AbstractTy))
     go [] _ = pure Nothing
     go _ [] = pure Nothing

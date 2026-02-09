@@ -116,7 +116,9 @@ extendedNodes (ExtendedASG nodes _ _) = nodes
 unExtendedASG :: ExtendedASG -> (Id, [(Id, ASGNode)])
 unExtendedASG (ExtendedASG nodes _ _) = (topSrcId, rawASG)
   where
+    topSrcId :: Id
     topSrcId = forgetExtendedId . fst $ M.findMax nodes
+    rawASG :: [(Id, ASGNode)]
     rawASG = first forgetExtendedId <$> M.toList nodes
 
 wrapASG :: Map Id ASGNode -> ExtendedASG
@@ -124,7 +126,6 @@ wrapASG asg = ExtendedASG nodes idResolver (fst . M.findMax $ asg)
   where
     nodes :: Map ExtendedId ASGNode
     nodes = M.mapKeys WrappedSrcId asg
-
     idResolver :: Map Id ExtendedId
     idResolver = M.fromList . map (\x -> (x, WrappedSrcId x)) . M.keys $ asg
 

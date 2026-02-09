@@ -135,7 +135,9 @@ prettyCompT (CompN cnt (ArgsAndResult args result))
   | null tyVars = mkFn
   | otherwise = mkForall <> "." <+> mkFn
   where
+    tyVars :: Vector (ValT AbstractTy)
     tyVars = countToTyVars cnt
+    mkForall :: Doc ann
     mkForall =
       ("forall" <+>)
         . hsep
@@ -143,14 +145,19 @@ prettyCompT (CompN cnt (ArgsAndResult args result))
         $ Vector.imap
           (\i _ -> "a_0" <> "#" <> pretty i)
           tyVars
+    pArgs :: [Doc ann]
     pArgs = Vector.toList $ prettyValT False <$> args
+    pRes :: Doc ann
     pRes = "!" <> prettyValT True result
+    mkFn :: Doc ann
     mkFn = hsep $ punctuate " ->" (pArgs <> [pRes])
 
 ppASG :: Map Id ASGNode -> String
 ppASG m = show $ runReaderT (simplePrettyASG getNode top (m M.! top)) (PrettyContext mempty mempty)
   where
+    top :: Id
     top = fst $ M.findMax m
+    getNode :: Id -> Maybe ASGNode
     getNode = flip M.lookup m
 
 crudePrettyASG' :: Map Id ASGNode -> String
@@ -172,9 +179,9 @@ crudePrettyASG nodes =
             ]
             <> hardline
         )
-
+    prettyId :: Id -> Doc ann
     prettyId (UnsafeMkId i) = "id_" <> pretty i
-
+    prettyRef :: Ref -> Doc ann
     prettyRef = \case
       AnArg (UnsafeMkArg db indx ty) ->
         let db' = review asInt db
@@ -182,7 +189,6 @@ crudePrettyASG nodes =
             pty = prettyValT False ty
          in parens $ "arg" <> pretty db' <> brackets (pretty indx') <+> ":" <+> pty
       AnId i -> prettyId i
-
     prettyInstTys :: [Wedge BoundTyVar (ValT Void)] -> Doc ann
     prettyInstTys = hsep . map goInstTy
       where
@@ -194,13 +200,11 @@ crudePrettyASG nodes =
                 indx' = review intIndex indx
              in "@" <> parens ("tyVar" <> pretty db' <> brackets (pretty indx'))
           There t -> "@" <> prettyValT True (vacuous t)
-
     prettyLamCxt :: CompT AbstractTy -> Doc ann
     prettyLamCxt (CompN _ (ArgsAndResult args _)) = hsep . Vector.toList . Vector.imap (\i -> parens . goCxt i) $ args
       where
         goCxt :: Int -> ValT AbstractTy -> Doc ann
         goCxt indx t = "arg0" <> brackets (pretty indx) <+> ":" <+> prettyValT False t
-
     prettyNodeBody :: ASGNode -> Doc ann
     prettyNodeBody = \case
       AnError -> "ERROR"
@@ -236,7 +240,6 @@ crudePrettyASG nodes =
         Builtin6 bi6 -> viaShow bi6
         Force forced -> "!" <> parens (prettyRef forced)
         Lam body -> "\\" <> prettyLamCxt compTy <+> "->" <+> prettyRef body
-
     prettyNodeTy :: ASGNode -> Doc ann
     prettyNodeTy = \case
       AnError -> "ERROR"
@@ -312,64 +315,3 @@ simplePrettyASG lookupNode thisId@(UnsafeMkId i) = \case
     mkVars :: CompT AbstractTy -> Vector (Doc ann)
     mkVars (CompN _ (ArgsAndResult args _)) =
       Vector.imap (\argpos _ -> "x_" <> pretty i <> "#" <> pretty argpos) args
-
-{-
-preprocess :: ExtendedASG -> Map Id (Either (Vector Name) (Vector Id))
-preprocess asg = fst $ evalRWS go mempty asg
-  where
-    go :: RWS (Vector Id) () ExtendedASG (Map Id (Either (Vector Name) (Vector Id)))
-    go = do
-        topId <- fst <$> eTopLevelSrcNode
-        mkArgResolutionDict (forgetExtendedId topId)
-
-mkArgResolutionDict ::
-    Id -> -- needs to be the source node for top level calls of this fn
-    RWS (Vector Id) () ExtendedASG (Map Id (Either (Vector Name) (Vector Id)))
-mkArgResolutionDict i =
-    eNodeAt i >>= \case
-        AnError -> notALambda $ pure M.empty
-        ACompNode compT compNode -> case compNode of
-            Lam bodyRef -> do
-                let numVarsBoundHere = compTArgs compT
-                    idW = idToWord i
-                names <- Vector.fromList <$> traverse (lamArgName idW) [0 .. numVarsBoundHere]
-                case bodyRef of
-                    AnId child -> local (Vector.cons i) $ do
-                        res <- mkArgResolutionDict child
-                        pure $ safeInsert i (Left names) res
-                    AnArg _ -> pure $ M.singleton i (Left names)
-            Force fRef -> notALambda $ goRef fRef
-            _someBuiltin -> notALambda $ pure M.empty
-        AValNode _valT valNode -> case valNode of
-            Lit _ -> notALambda $ pure M.empty
-            App fn args _ _ -> notALambda $ do
-                fnDict <- mkArgResolutionDict fn
-                argsDicts <- mconcat <$> traverse goRef (Vector.toList args)
-                pure $ fnDict <> argsDicts
-            Thunk child -> notALambda $ mkArgResolutionDict child
-            Cata ty handlers arg -> notALambda $ mconcat <$> traverse goRef (arg : Vector.toList handlers)
-            DataConstructor _tn _cn args -> notALambda $ mconcat <$> traverse goRef (Vector.toList args)
-            Match scrut handlers -> notALambda $ mconcat <$> traverse goRef (scrut : Vector.toList handlers)
-  where
-    safeInsert :: forall (k :: Type) (v :: Type). (Ord k) => k -> v -> Map k v -> Map k v
-    safeInsert k v = M.alter (\case Nothing -> Just v; other -> other) k
-
-    lamArgName :: Word64 -> Int -> RWS (Vector Id) () ExtendedASG Name
-    lamArgName i' argPos = do
-        let txtPart = "arg_" <> T.pack (show i') <> "_" <> T.pack (show argPos)
-        (UnsafeMkId uniqueW) <- nextId
-        pure $ Name txtPart (Unique (fromIntegral uniqueW))
-
-    goRef :: Ref -> RWS (Vector Id) () ExtendedASG (Map Id (Either (Vector Name) (Vector Id)))
-    goRef = \case
-        AnArg _ -> pure M.empty
-        AnId anId -> mkArgResolutionDict anId
-
-    notALambda ::
-        RWS (Vector Id) () ExtendedASG (Map Id (Either (Vector Name) (Vector Id))) ->
-        RWS (Vector Id) () ExtendedASG (Map Id (Either (Vector Name) (Vector Id)))
-    notALambda act = do
-        here <- Right <$> ask
-        there <- act
-        pure . safeInsert i here $ there
--}

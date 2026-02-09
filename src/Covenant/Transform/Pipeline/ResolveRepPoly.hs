@@ -130,25 +130,21 @@ resolveRepPoly = eTopLevelSrcNode >>= go . fst
               <> msg
               <> "\n\n"
       error errMsg
-
     unsafeFnTy :: forall k. (ExtendedKey k, Show k) => k -> m (CompT AbstractTy)
     unsafeFnTy k =
       getASG >>= \asg -> case eSafeNodeAt k asg of
         Just (ACompNode compT _) -> pure compT
         other -> traceError $ "unsafeFnTy called on " <> show other <> " which isn't a comp node"
-
     goRef :: Ref -> m ()
     goRef = \case
       AnId i -> resolveExtended i >>= go
       AnArg {} -> pure ()
-
     withLocation :: Id -> (ASTRef -> m r) -> m r
     withLocation anId f = do
       lamScope <- fmap (\(LambdaId x) -> x) <$> asks (R..! #callPath)
       appScope <- fmap (\(AppId x) -> x) <$> asks (R..! #appPath)
       let ref = ASTRef {underLams = lamScope, underApps = appScope, appNodeId = anId}
       f ref
-
     dbBindingSite :: DeBruijn -> m LambdaId
     dbBindingSite db = do
       let dbInt = review asInt db

@@ -152,11 +152,13 @@ mkTypeSchema isIntro dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = ca
             msg' = msg <> "\n  result: " <> pCompT fnTyWithHandlers
          in trace msg' $ DataSchema fnTyWithHandlers handlerDict
   where
+    msg :: String
     msg =
       "\nmkTypeSchema\n  fnTy: "
         <> pCompT fnTy
         <> "\n  allUsedTyVarIndices: "
         <> show allUsedTyVarIndices
+    lenOrigArgs :: Int
     lenOrigArgs = Vector.length args
     allUsedTyVarIndices :: [Index "tyvar"]
     allUsedTyVarIndices =
@@ -175,62 +177,9 @@ mkTypeSchema isIntro dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = ca
         isR :: Index "tyvar" -> Bool
         isR indx = review intIndex indx == rIndx
         rIndx = review intCount tvCnt - 1
-
     collectIndices :: ValT AbstractTy -> [Index "tyvar"]
     collectIndices = \case
       Abstraction (BoundAt _ indx) -> [indx]
       ThunkT (CompN _ (ArgsAndResult args' _)) -> concatMap collectIndices $ Vector.toList args'
       BuiltinFlat _ -> []
       Datatype _ args' -> concatMap collectIndices $ Vector.toList args'
-
-{-
--- TODO/REVIEW: Maybe this needs to run in a reader to track DB levels?
-mkSchema :: DataEncoding -> CompT AbstractTy -> MagicTypeSchema
-mkSchema dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = case dataEnc of
-    SOP -> SOPSchema fnTy
-    BuiltinStrategy _strat ->
-        error $
-            "TODO: Try to remember what we would need to do here. For this (but not the codegen), "
-                <> "it's probably fine to generate the same thing as for PlutusData"
-    PlutusData _strat ->
-        -- strategy doesn't matter HERE though it does for codegen
-        -- note that we *can't* have "external" rigids here
-
-        -- We only care about adding wrappers for types that occur as arguments.
-        -- And - extra nice for us - we can just ignore thunks becaaauusssee
-        -- this is data-encoded and they can't exist as params anyway. So we really just need to
-        -- look for any arg that is a tyvar
-        let getTyVar :: ValT AbstractTy -> Maybe AbstractTy
-            getTyVar = \case
-                Abstraction a -> Just a
-                _ -> Nothing
-
-            -- We need to return *something* that indicates which extra handler arg is associated w/ a particular
-            -- tyvar. Not immediately sure what the best way to do this is.
-            usedTypeVariables :: [AbstractTy]
-            usedTypeVariables = S.toList . S.fromList . mapMaybe getTyVar . Vector.toList $ args
-
-            lenOrigArgs = Vector.length args
-
-            extraArgs' :: (Int, Map AbstractTy Int, Vector (ValT AbstractTy))
-            extraArgs' =
-                let mkHandler (BoundAt db indx) =
-                        let tv = tyvar (S db) indx
-                         in ThunkT (Comp0 $ tv :--:> ReturnT tv)
-                 in foldl'
-                        ( \(pos, handlerDict, eArgs) tv ->
-                            let newHandlerDict = M.insert tv (pos + lenOrigArgs) handlerDict
-                                newPos = pos + 1
-                                handler = mkHandler tv
-                                newEArgs = Vector.snoc eArgs handler
-                             in (newPos, newHandlerDict, newEArgs)
-                        )
-                        (0, M.empty, Vector.empty)
-                        usedTypeVariables
-
-            (_, hDict, extraArgs) = extraArgs'
-
-            polyFnTy :: CompT AbstractTy
-            polyFnTy = CompN tvCnt $ ArgsAndResult (args <> extraArgs) result
-         in DataSchema polyFnTy (`M.lookup` hDict)
--}

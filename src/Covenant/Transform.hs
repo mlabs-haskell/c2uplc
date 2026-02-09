@@ -46,31 +46,3 @@ transformASG dtDict = do
           .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
           .+ #repPolyHandlers .== finalRepHandlers
   pure codeGenData
-
-{-
--- This actually inserts bodies into our identity fn / projection embed handlers
--- and removes the placeholder error node
--- NOTE: I don't *think* we need this anymore?
-mkStubs :: forall m. (MonadASG m) => Rec FirstPassMeta -> m (Map Id PlutusTerm)
-mkStubs firstPassData = do
-    -- removeEphemeralError (firstPassData R..! #uniqueError)
-    polyRepStubs <- foldM cleanupPolyRep M.empty (M.toList $ firstPassData R..! #builtinHandlers)
-    cleanupIdentity (firstPassData R..! #identityFn) polyRepStubs
-  where
-    cleanupPolyRep :: Map Id PlutusTerm -> (BuiltinFlatT, PolyRepHandler) -> m (Map Id PlutusTerm)
-    cleanupPolyRep acc (biTy, (PolyRepHandler projId embedId)) = case biTy of
-        IntegerT ->
-            pure
-                . M.insert projId (pBuiltin UnIData)
-                . M.insert embedId (pBuiltin IData)
-                $ acc
-        ByteStringT ->
-            pure
-                . M.insert projId (pBuiltin UnBData)
-                . M.insert embedId (pBuiltin BData)
-                $ acc
-    cleanupIdentity :: ExtendedId -> Map Id PlutusTerm -> m (Map Id PlutusTerm)
-    cleanupIdentity (forgetExtendedId -> i) acc = do
-        term <- pFreshLam pure
-        pure $ M.insert i term acc
--}

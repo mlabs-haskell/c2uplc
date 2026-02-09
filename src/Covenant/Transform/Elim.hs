@@ -51,14 +51,15 @@ import Covenant.Transform.Schema
   )
 import Covenant.Type
   ( AbstractTy,
-    BuiltinFlatT (ByteStringT, IntegerT),
     CompT (Comp0, Comp1, Comp2, Comp3, CompN),
     CompTBody (ArgsAndResult, ReturnT, (:--:>)),
     DataDeclaration (DataDeclaration, OpaqueData),
     DataEncoding (BuiltinStrategy, PlutusData, SOP),
     PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
     TyName (TyName),
-    ValT (BuiltinFlat, Datatype, ThunkT),
+    ValT (Datatype, ThunkT),
+    byteStringT,
+    integerT,
     tyvar,
   )
 import Data.Foldable (foldl')
@@ -296,39 +297,37 @@ builtinElimForm (TyName tn) _enc = case tn of
     let matchDataTy =
           Comp1 $
             dataT
-              :--:> thunk0 (intT :--:> listT dataT :--:> ReturnT a')
+              :--:> thunk0 (integerT :--:> listT dataT :--:> ReturnT a')
               :--:> thunk0 (listT (pairT dataT dataT) :--:> ReturnT a')
               :--:> thunk0 (listT dataT :--:> ReturnT a')
-              :--:> thunk0 (intT :--:> ReturnT a')
+              :--:> thunk0 (integerT :--:> ReturnT a')
               :--:> thunk0 (byteStringT :--:> ReturnT a')
               :--:> ReturnT a'
     pure $ BuiltinTyFixer matchDataTy Data_Match
   _ -> error $ "builtin elimination forms not supported for type: " <> T.unpack tn
   where
+    thunk0 :: forall (a :: Type). CompTBody a -> ValT a
     thunk0 = ThunkT . Comp0
-
     dataT :: ValT AbstractTy
     dataT = dt "Data" []
-
     listT :: ValT AbstractTy -> ValT AbstractTy
     listT t = dt "List" [t]
-
     pairT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
     pairT x y = dt "Pair" [x, y]
-
     -- The ADT not the ctor of data
     mapT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
     mapT k v = dt "Map" [k, v]
-
-    intT = BuiltinFlat IntegerT
-    byteStringT = BuiltinFlat ByteStringT
-
+    a :: ValT AbstractTy
     a = tyvar Z ix0
+    b :: ValT AbstractTy
     b = tyvar Z ix1
+    c :: ValT AbstractTy
     c = tyvar Z ix2
-
+    a' :: ValT AbstractTy
     a' = tyvar (S Z) ix0
+    b' :: ValT AbstractTy
     b' = tyvar (S Z) ix1
+    c' :: ValT AbstractTy
     c' = tyvar (S Z) ix2
-
+    dt :: forall (a :: Type). TyName -> Vector (ValT a) -> ValT a
     dt = Datatype
