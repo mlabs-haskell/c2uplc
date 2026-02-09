@@ -5,8 +5,7 @@
 {- HLINT ignore "Use camelCase" -}
 
 module Covenant.Plutus
-  ( PlutusTerm,
-    pVar,
+  ( pVar,
     pLam,
     pApp,
     pForce,
@@ -116,71 +115,85 @@ import UntypedPlutusCore
   )
 
 -- mock Plutus types and placeholder helpers
-type PlutusTerm = Term Name DefaultUni DefaultFun ()
+-- type Term Name DefaultUni DefaultFun () = Term Name DefaultUni DefaultFun ()
 
-pVar :: Name -> PlutusTerm
+pVar :: Name -> Term Name DefaultUni DefaultFun ()
 pVar = Var ()
 
-pLam :: Name -> PlutusTerm -> PlutusTerm
+pLam ::
+  Name ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 pLam = LamAbs ()
 
-pApp :: PlutusTerm -> PlutusTerm -> PlutusTerm
+pApp ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 pApp = Apply ()
 
-pLet :: Name -> PlutusTerm -> PlutusTerm -> PlutusTerm
+pLet ::
+  Name ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 pLet varNm toBind inner = pLam varNm inner # toBind
 
 -- It just makes things easier to read. Same fixity as plutarch
-(#) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 f # a = pApp f a
 
 infixl 8 #
 
-pForce :: PlutusTerm -> PlutusTerm
+pForce :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pForce = Force ()
 
-pDelay :: PlutusTerm -> PlutusTerm
+pDelay :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pDelay = Delay ()
 
-pError :: PlutusTerm
+pError :: Term Name DefaultUni DefaultFun ()
 pError = Error ()
 
-pCase :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+pCase ::
+  Term Name DefaultUni DefaultFun () ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 pCase = Case ()
 
-betterPrettyPlutus :: forall ann. PlutusTerm -> Doc ann
+betterPrettyPlutus :: forall ann. Term Name DefaultUni DefaultFun () -> Doc ann
 betterPrettyPlutus pt = vcat . reverse $ go [] pt
   where
-    go :: [Doc ann] -> PlutusTerm -> [Doc ann]
+    go :: [Doc ann] -> Term Name DefaultUni DefaultFun () -> [Doc ann]
     go acc = \case
       Apply () (LamAbs () (Name txt _) body) arg ->
         let here = "let" <+> pretty txt <+> "=" <+> pretty arg <+> space
          in go (here : acc) body
       other -> pretty other : acc
 
-ppTerm :: PlutusTerm -> String
+ppTerm :: Term Name DefaultUni DefaultFun () -> String
 ppTerm = show . prettyPTerm
 
-prettyPTerm :: forall ann. PlutusTerm -> Doc ann
+prettyPTerm :: forall ann. Term Name DefaultUni DefaultFun () -> Doc ann
 prettyPTerm pt = case takeBindable ([], pt) of
   ([], rest) -> prettyNoBind rest
   (letBinds, rest) ->
     let pRest = "in" <+> prettyNoBind rest
      in align . vsep . reverse $ (pRest : letBinds)
   where
-    takeBindable :: ([Doc ann], PlutusTerm) -> ([Doc ann], PlutusTerm)
+    takeBindable :: ([Doc ann], Term Name DefaultUni DefaultFun ()) -> ([Doc ann], Term Name DefaultUni DefaultFun ())
     takeBindable (acc, t) = case t of
       Apply () (LamAbs () (Name txt _) body) arg ->
         let here = "let" <+> pretty txt <+> "=" <+> prettyPTerm arg
          in takeBindable (here : acc, body)
       other -> (acc, other)
-
-    takeLamArgs :: ([Text], PlutusTerm) -> ([Text], PlutusTerm)
+    takeLamArgs :: ([Text], Term Name DefaultUni DefaultFun ()) -> ([Text], Term Name DefaultUni DefaultFun ())
     takeLamArgs (varAcc, next) = case next of
       LamAbs () (Name txt _) body -> takeLamArgs (txt : varAcc, body)
       _ -> (reverse varAcc, next)
-
-    prettyNoBind :: PlutusTerm -> Doc ann
+    prettyNoBind :: Term Name DefaultUni DefaultFun () -> Doc ann
     prettyNoBind = \case
       Var () (Name txt _) -> pretty txt
       LamAbs () (Name txt _) _body ->
@@ -205,8 +218,7 @@ prettyPTerm pt = case takeBindable ([], pt) of
               ( group
                   (nest 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
               )
-
-    prettyAtomic :: PlutusTerm -> Doc ann
+    prettyAtomic :: Term Name DefaultUni DefaultFun () -> Doc ann
     prettyAtomic = \case
       v@Var {} -> prettyNoBind v
       c@Constant {} -> prettyNoBind c
@@ -215,12 +227,12 @@ prettyPTerm pt = case takeBindable ([], pt) of
       f@Force {} -> prettyNoBind f
       b@Builtin {} -> prettyNoBind b
       other -> align . group . parens . prettyNoBind $ other
-    analyzeApp :: PlutusTerm -> [PlutusTerm]
+    analyzeApp :: Term Name DefaultUni DefaultFun () -> [Term Name DefaultUni DefaultFun ()]
     analyzeApp = \case
       Apply () f arg -> analyzeApp f <> [arg]
       other -> [other]
 
-pConstant :: AConstant -> PlutusTerm
+pConstant :: AConstant -> Term Name DefaultUni DefaultFun ()
 pConstant = \case
   AUnit -> mkConstant () ()
   ABoolean b -> mkConstant () b
@@ -229,106 +241,147 @@ pConstant = \case
   AString txt -> mkConstant () txt
 
 -- | Makes the SOP Constr
-pConstr :: Word64 -> Vector PlutusTerm -> PlutusTerm
+pConstr ::
+  Word64 ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 pConstr w = Constr () w . Vector.toList
 
-plutus_I :: Integer -> PlutusTerm
+plutus_I :: Integer -> Term Name DefaultUni DefaultFun ()
 plutus_I i = pBuiltin Prim.IData # mkConstant () i
 
 -- Makes a Constr PlutusData
-plutus_ConstrData :: Integer -> Vector PlutusTerm -> PlutusTerm
+plutus_ConstrData ::
+  Integer ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 plutus_ConstrData cix ctorArgs = constrData (mkConstant () cix) (pBuiltinList pNilData ctorArgs)
 
 -- these _Data functions probably correspond to builtins, I'll look up their names later
 -- NOTE: I guess we could do these in the ASG by applying a builtin function.
 --       That might be easier than doing it in Plutus. Not sure.
 -- 'I'
-iData :: PlutusTerm -> PlutusTerm
+iData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 iData t = pBuiltin Prim.IData # t
 
-unIData :: PlutusTerm -> PlutusTerm
+unIData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 unIData t = pBuiltin Prim.UnIData # t
 
 -- 'B'
-bData :: PlutusTerm -> PlutusTerm
+bData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 bData t = pBuiltin Prim.BData # t
 
 -- 'Constr' (The data one)
 
 -- | This exepects a non-data-encoded Integer term for the first arg.
 -- TODO Check that that's what we give it anywhere it might be used
-constrData :: PlutusTerm -> PlutusTerm -> PlutusTerm
+constrData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 constrData cix ctorArgs = pBuiltin Prim.ConstrData # cix # ctorArgs
 
 -- This rips apart a (data) Constr and returns the (Int,[Data]) pair (at the PLC level)
-unConstrData :: PlutusTerm -> PlutusTerm
+unConstrData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 unConstrData t = pBuiltin Prim.UnConstrData # t
 
 -- does not apply anything to the handlers
-caseConstrEnum :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+caseConstrEnum ::
+  Term Name DefaultUni DefaultFun () ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 caseConstrEnum scrut = pCase ctorIx
   where
     ctorIx = pFst (unConstrData scrut)
 
 -- convenience for pApp FstPair
-pFst :: PlutusTerm -> PlutusTerm
+pFst :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pFst aPair = pBuiltin Prim.FstPair # aPair
 
 -- convenicne for pApp SndPair
-pSnd :: PlutusTerm -> PlutusTerm
+pSnd :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pSnd aPair = pBuiltin Prim.SndPair # aPair
 
-pCons :: PlutusTerm -> PlutusTerm -> PlutusTerm
+pCons ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 pCons x xs = pBuiltin Prim.MkCons # x # xs
 
-pNilData :: PlutusTerm
+pNilData :: Term Name DefaultUni DefaultFun ()
 pNilData = Constant () $ someValue @[Data] []
 
 -- | Uses `case` and not `IfThenElse`
-pIf :: PlutusTerm -> PlutusTerm -> PlutusTerm -> PlutusTerm
+pIf ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 pIf cond t f = pCase cond [f, t]
 
-(#-) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#-) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 x #- y =
   let minus = Builtin () PB.SubtractInteger
    in minus # x # y
 
-(#<=) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#<=) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 x #<= y =
   let lte = Builtin () PB.LessThanEqualsInteger
    in lte # x # y
 
-(#<) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#<) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 x #< y = pBuiltin Prim.LessThanInteger # x # y
 
-(#==) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#==) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 x #== y = pBuiltin Prim.EqualsInteger # x # y
 
-(#+) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#+) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 x #+ y = pBuiltin Prim.AddInteger # x # y
 
-(#!) :: PlutusTerm -> PlutusTerm -> PlutusTerm
+(#!) ::
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun () ->
+  Term Name DefaultUni DefaultFun ()
 bs #! ix = pBuiltin Prim.IndexByteString # bs # ix
 
 -- This makes a builtin list, not data-wrapped
-pBuiltinList :: PlutusTerm -> Vector PlutusTerm -> PlutusTerm
+pBuiltinList ::
+  Term Name DefaultUni DefaultFun () ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 pBuiltinList = Vector.foldr pCons
 
 -- This makes the PLUTUS DATA LIST (not a builtin list)
-listData :: Vector PlutusTerm -> PlutusTerm
+listData ::
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 listData els = pBuiltin Prim.ListData # pBuiltinList pNilData els
 
 -- List xs -> xs
-unListData :: PlutusTerm -> PlutusTerm
+unListData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 unListData t = pBuiltin Prim.UnListData # t
 
-pHead :: PlutusTerm -> PlutusTerm
+pHead :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pHead t = pBuiltin Prim.HeadList # t
 
-pTail :: PlutusTerm -> PlutusTerm
+pTail :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 pTail t = pBuiltin Prim.TailList # t
 
-mapData :: Vector PlutusTerm -> PlutusTerm
+mapData ::
+  Vector (Term Name DefaultUni DefaultFun ()) ->
+  Term Name DefaultUni DefaultFun ()
 mapData t = pBuiltin Prim.MapData # pBuiltinList pNilData t
 
 class IsBuiltin t where
@@ -348,7 +401,7 @@ instance IsBuiltin SixArgFunc where
 
 -- maybe there's something in plutus but writing the class takes way less long
 -- than poking around in that mess of NO EXPLICIT IMPORTS
-pBuiltin :: forall t. (IsBuiltin t) => t -> PlutusTerm
+pBuiltin :: forall t. (IsBuiltin t) => t -> Term Name DefaultUni DefaultFun ()
 pBuiltin = pMkBuiltin . mkBuiltin
 
 data SomeBuiltin where
@@ -357,7 +410,7 @@ data SomeBuiltin where
   SomeBuiltin3 :: ThreeArgFunc -> SomeBuiltin
   SomeBuiltin6 :: SixArgFunc -> SomeBuiltin
 
-pMkBuiltin :: SomeBuiltin -> PlutusTerm
+pMkBuiltin :: SomeBuiltin -> Term Name DefaultUni DefaultFun ()
 pMkBuiltin = \case
   SomeBuiltin1 bi -> case bi of
     Prim.LengthOfByteString -> Builtin () PB.LengthOfByteString

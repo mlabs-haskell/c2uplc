@@ -40,7 +40,6 @@ import Covenant.ExtendedASG
     forgetExtendedId,
     projectionId,
   )
-import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
@@ -50,6 +49,7 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Vector (Vector)
 import Data.Void (Void, absurd)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 {- I need some kind of unifying abstraction for all the transformation passes here.
 
@@ -101,7 +101,10 @@ newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
     )
     via (StubM (State ExtendedASG))
 
-runCodeGen :: ExtendedASG -> CodeGen PlutusTerm -> Either StubError PlutusTerm
+runCodeGen ::
+  ExtendedASG ->
+  CodeGen (Term Name DefaultUni DefaultFun ()) ->
+  Either StubError (Term Name DefaultUni DefaultFun ())
 runCodeGen e (CodeGen act) = evalState (compileStubM defStubs act) e
 
 newtype PassM e r s a = PassM (ExceptT e (RWST r () s CodeGen) a)
@@ -152,7 +155,7 @@ data ASTRef = ASTRef {underLams :: Vector Id, underApps :: Vector Id, appNodeId 
 
 data RepPolyHandlers
   = RepPolyHandlers
-  { ixedById :: Map Id (PlutusTerm, HandlerType, ValT AbstractTy),
+  { ixedById :: Map Id (Term Name DefaultUni DefaultFun (), HandlerType, ValT AbstractTy),
     ixedByType :: Map (ValT AbstractTy, HandlerType) Id,
     -- This is stupid and shouldn't be here but it is kind of the only sensible place to put it
     -- due to Nil being incredibly weird in how we have to handle it internally -_-

@@ -13,8 +13,7 @@ import Covenant.Data (DatatypeInfo (DatatypeInfo), mkCataFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z))
 import Covenant.Index (Count, intCount, intIndex, ix0, ix1)
 import Covenant.Plutus
-  ( PlutusTerm,
-    pApp,
+  ( pApp,
     pCase,
     pForce,
     pLam,
@@ -75,6 +74,7 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Optics.Core (preview, review, view)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 -- NOTE: 'Natural' and 'Negative' + The ByteString cata don't really fit in here
 --       so we have to add them manually when we call this
@@ -136,7 +136,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
       Text ->
       DataEncoding ->
       TypeSchema ->
-      m PlutusTerm
+      m (Term Name DefaultUni DefaultFun ())
     -- \* TODO/FIXME: We really need to check whether it has a builtin encoding first and process that separately. Most of what we do here isn't useful for those.
     genCataPLC (CompN cataFnCount (ArgsAndResult origCataFnArgs _)) nameBase _enc schema = do
       {- NOTE: This is a bit different than the other cases. Here, a cata function will have a type like:
@@ -169,25 +169,23 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
           {- As with `match`, this is a Haskell-level function which takes the body of a series of nested lambas as an argument
              and returns the complete lambda.
           -}
-          lamBuilder :: PlutusTerm -> PlutusTerm
+          lamBuilder :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
           lamBuilder = foldl' (\g argN -> g . pLam argN) id lamArgNames
           {- This is really the "argument" to the catamorphism but since we have quite a few other things called "arguments" here,
              I will follow the convention of `match` and refer to it as the scrutinee (even though that is kind of wrong)
 
              NOTE: Due to the extra self argument, we want the var at index 1, not 0. Index 0 is the self arg.
           -}
-          scrutinee :: PlutusTerm
+          scrutinee :: Term Name DefaultUni DefaultFun ()
           scrutinee = lamArgVars Vector.! 1
-
           {- The handler functions for each arm. Again, we have to be careful here to ignore *both* the "self" argument and the scrutinee.
           -}
-          armHandlers :: Vector PlutusTerm
+          armHandlers :: Vector (Term Name DefaultUni DefaultFun ())
           armHandlers =
             let numHandlers = Vector.length origCataFnArgs - 1 -- since we add 'self' in this module, we only subtract one, as we are working from the generated cata type
             -- the handlers are always going to occur like: \self scrutinee handler1 handler2...
             -- so we want to start the slice at index 2
              in Vector.slice 2 numHandlers lamArgVars
-
           armHandlerTypes :: Vector (ValT AbstractTy)
           armHandlerTypes =
             -- HERE we're slicing the vector of the function signature for the cata function type, so we want to start
@@ -195,13 +193,13 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
             -- Since there are no projection handler args in the original function type, we can take a shortcut here and
             -- just drop the first element of the vector of cata fn arg types.
             Vector.drop 1 origCataFnArgs
-
-          insertForce :: (ValT AbstractTy, PlutusTerm) -> (ValT AbstractTy, PlutusTerm)
+          insertForce ::
+            (ValT AbstractTy, Term Name DefaultUni DefaultFun ()) ->
+            (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           insertForce (v, t) = case v of
             ThunkT {} -> (v, pForce t)
             _ -> (v, t)
-
-          typedHandlers :: Vector (ValT AbstractTy, PlutusTerm)
+          typedHandlers :: Vector (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           typedHandlers = insertForce <$> Vector.zip armHandlerTypes armHandlers
       case schema of
         SOPSchema _ -> do
@@ -308,7 +306,11 @@ mkWrappedHandlerSOP ::
     MonadReader Datatypes m,
     MonadState RepPolyHandlers m
   ) =>
-  PlutusTerm -> Count "tyvar" -> ValT AbstractTy -> PlutusTerm -> m PlutusTerm
+  Term Name DefaultUni DefaultFun () ->
+  Count "tyvar" ->
+  ValT AbstractTy ->
+  Term Name DefaultUni DefaultFun () ->
+  m (Term Name DefaultUni DefaultFun ())
 mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandlerTy of
   -- The count of this function HAS to be 0, we forbid polymorphic handlers (somewhere). REVIEW: Where?
   ThunkT (CompN _ (ArgsAndResult armHandlerArgTys _)) -> do

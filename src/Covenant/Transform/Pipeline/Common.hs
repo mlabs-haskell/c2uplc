@@ -28,7 +28,6 @@ import Covenant.ExtendedASG
     MonadASG (getASG, putASG),
   )
 import Covenant.Index (Index)
-import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (CompNodeInfo (LamInternal))
 import Covenant.Transform.Common
   ( TyFixerDataBundle,
@@ -57,6 +56,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Data.Void (Void)
 import GHC.TypeLits (KnownSymbol, Symbol)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 type CodeGenData =
   "tyFixerData" .== Map TyName TyFixerDataBundle
@@ -137,7 +137,7 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
   Map (Index "tyvar") Int ->
   -- The thing we use the previous argument to index into; the arguments to the
   -- function-alized type fixer for the datatype.
-  Vector PlutusTerm ->
+  Vector (Term Name DefaultUni DefaultFun ()) ->
   -- This is the index of the 'r' variable if we're in a catamorphism.
   -- This should ONLY be `Just` if we're working with a cata.
   -- We use this to determine whether to return 'self' (which
@@ -145,7 +145,7 @@ resolvePolyRepHandler :: -- Gets the projection or embedding we need (if it exis
   -- and which functions somewhat analogously to a projection/embedding function)
   Maybe (Index "tyvar") ->
   ValT AbstractTy ->
-  m (Maybe PlutusTerm)
+  m (Maybe (Term Name DefaultUni DefaultFun ()))
 resolvePolyRepHandler nodeKind handlerArgPosDict lamArgVars maybeR valT =
   case valT of
     Abstraction (BoundAt _ indx) -> case M.lookup indx handlerArgPosDict of

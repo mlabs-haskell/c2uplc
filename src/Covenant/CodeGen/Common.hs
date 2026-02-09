@@ -38,8 +38,7 @@ import Covenant.ExtendedASG
   )
 import Covenant.Index (intIndex)
 import Covenant.Plutus
-  ( PlutusTerm,
-    pApp,
+  ( pApp,
     pBuiltin,
     pDelay,
     pForce,
@@ -110,7 +109,7 @@ import GHC.TypeLits (Symbol)
 import Optics.Core (review)
 import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
-import UntypedPlutusCore (Unique (Unique))
+import UntypedPlutusCore (DefaultFun, DefaultUni, Term, Unique (Unique))
 
 {- Since we're switching to top-down compilation, this has to work a little differently.
 
@@ -129,7 +128,7 @@ newtype CodeGenContext
   = CodeGenContext
   { getContext ::
       Rec
-        ( "termScope" .== Map Id PlutusTerm
+        ( "termScope" .== Map Id (Term Name DefaultUni DefaultFun ())
             .+ "argScope" .== Map LambdaId (Vector Name)
             .+ "lamScope" .== Vector LambdaId
             -- We ONLY need an appscope for resolving Nil -_-
@@ -174,7 +173,14 @@ data ArgResolutionFailReason
 -- TODO rewrite all the sigs to use constraints, no time now
 type CodeGenM a = PassM CodeGenError CodeGenContext Int a
 
-runCodeGenM :: forall a. RepPolyHandlers -> Map Id TyFixerFnData -> Map Id ASGNode -> Map Id PlutusTerm -> CodeGenM a -> CodeGen (Either CodeGenError a)
+runCodeGenM ::
+  forall a.
+  RepPolyHandlers ->
+  Map Id TyFixerFnData ->
+  Map Id ASGNode ->
+  Map Id (Term Name DefaultUni DefaultFun ()) ->
+  CodeGenM a ->
+  CodeGen (Either CodeGenError a)
 runCodeGenM repPoly fixers m termScope act =
   runPass cxt 0 act >>= \case
     Left err -> pure $ Left err
@@ -224,7 +230,7 @@ checkNilFixer i = do
   -- withLocation i $ \astRef -> pure $ astRef `S.member` nilFixers
   pure $ i `S.member` nilFixerIds
 
-lookupVar :: Id -> CodeGenM (Maybe PlutusTerm)
+lookupVar :: Id -> CodeGenM (Maybe (Term Name DefaultUni DefaultFun ()))
 lookupVar i = do
   CodeGenContext r <- ask
   pure $ M.lookup i (r R..! #termScope)
@@ -263,7 +269,11 @@ freshUnique = do
   put new
   pure (Unique new)
 
-crossLam :: CompT AbstractTy -> LambdaId -> CodeGenM PlutusTerm -> CodeGenM PlutusTerm
+crossLam ::
+  CompT AbstractTy ->
+  LambdaId ->
+  CodeGenM (Term Name DefaultUni DefaultFun ()) ->
+  CodeGenM (Term Name DefaultUni DefaultFun ())
 crossLam compT lid@(LambdaId i) act = do
   vars <- mkLamArgNames i compT
   let f = foldl' (\g argN -> g . pLam argN) id vars
@@ -300,7 +310,7 @@ rModify f l r = R.update l new r
 
 runTopDownCompile ::
   Rec CodeGenData ->
-  CodeGen (Either CodeGenError PlutusTerm)
+  CodeGen (Either CodeGenError (Term Name DefaultUni DefaultFun ()))
 runTopDownCompile plData = do
   eAsg <- getASG
   let emptyPrepSt = #onlySrcNodes .== mempty .+ #initTermScope .== mempty .+ #bind .== mempty
@@ -309,7 +319,6 @@ runTopDownCompile plData = do
       topId = fst $ M.findMax nodes
       termScope = prepRec R..! #initTermScope
       repHandlers = plData R..! #repPolyHandlers
-
       doBinds = foldr (\(nm, term) acc -> pLet nm term . acc) id (prepRec R..! #bind)
   fmap doBinds <$> runCodeGenM repHandlers (plData R..! #tyFixers) nodes termScope (compileTopDown topId)
 
@@ -323,8 +332,8 @@ prepare ::
   State
     ( Rec
         ( "onlySrcNodes" .== Map Id ASGNode
-            .+ "initTermScope" .== Map Id PlutusTerm
-            .+ "bind" .== [(Name, PlutusTerm)]
+            .+ "initTermScope" .== Map Id (Term Name DefaultUni DefaultFun ())
+            .+ "bind" .== [(Name, Term Name DefaultUni DefaultFun ())]
         )
     )
     ()
@@ -357,7 +366,7 @@ prepare plData eAsg = do
         -- care of that for us. Not sure if we even need them in the term scope?
         Nothing -> pure ()
 
-nodeOrVar :: Id -> CodeGenM (Either PlutusTerm ASGNode)
+nodeOrVar :: Id -> CodeGenM (Either (Term Name DefaultUni DefaultFun ()) ASGNode)
 nodeOrVar i =
   lookupVar i
     >>= \case
@@ -383,7 +392,7 @@ nodeOrVar i =
                     <> " which belongs to a type fixer of type: "
                     <> pCompT (tyFixerFnTy tyFixer)
 
-compileTopDown :: Id -> CodeGenM PlutusTerm
+compileTopDown :: Id -> CodeGenM (Term Name DefaultUni DefaultFun ())
 compileTopDown nodeId =
   nodeOrVar nodeId
     >>= \case
@@ -427,7 +436,7 @@ compileTopDown nodeId =
           Thunk childId -> pDelay <$> compileTopDown childId
           other -> error $ "value nodes should all be lits apps or thunks but got: " <> show other
   where
-    compileRef :: Ref -> CodeGenM PlutusTerm
+    compileRef :: Ref -> CodeGenM (Term Name DefaultUni DefaultFun ())
     compileRef r = case r of
       AnId i -> do
         -- we have to check here for "nil-fixer-ness", I think?
@@ -446,7 +455,7 @@ compileTopDown nodeId =
       AnArg arg -> pVar <$> resolveArg arg
 
     -- we can't do Nil w/ just this information so we catch it above
-    compileBIFixer :: BuiltinFnData -> CodeGenM PlutusTerm
+    compileBIFixer :: BuiltinFnData -> CodeGenM (Term Name DefaultUni DefaultFun ())
     compileBIFixer = \case
       List_Cons -> pure $ pBuiltin MkCons
       List_Nil -> error "Unapplied Empty List Constructor"
@@ -466,10 +475,16 @@ compileTopDown nodeId =
       Map_Match -> pFreshLam2 $ \xs f -> pure $ pForce f # xs
       Data_Match -> resolveStub "matchData"
 
-    withLocalBinds :: Map Id ASGNode -> CodeGenM PlutusTerm -> CodeGenM PlutusTerm
+    withLocalBinds ::
+      Map Id ASGNode ->
+      CodeGenM (Term Name DefaultUni DefaultFun ()) ->
+      CodeGenM (Term Name DefaultUni DefaultFun ())
     withLocalBinds toBind = letMany (M.keys toBind)
       where
-        letMany :: [Id] -> CodeGenM PlutusTerm -> CodeGenM PlutusTerm
+        letMany ::
+          [Id] ->
+          CodeGenM (Term Name DefaultUni DefaultFun ()) ->
+          CodeGenM (Term Name DefaultUni DefaultFun ())
         letMany [] act = act
         letMany (i : rest) act = do
           let nm = idToName i
@@ -536,7 +551,7 @@ biNeedsDelay = \case
   Map_Match -> False
   Data_Match -> False
 
-litToTerm :: AConstant -> CodeGenM PlutusTerm
+litToTerm :: AConstant -> CodeGenM (Term Name DefaultUni DefaultFun ())
 litToTerm = \case
   AUnit -> pure $ mkConstant () ()
   ABoolean b -> pure $ mkConstant () b

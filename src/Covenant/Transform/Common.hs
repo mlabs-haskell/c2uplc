@@ -37,8 +37,7 @@ import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.ExtendedASG (MonadASG, nextId)
 import Covenant.Index (Count, intCount, intIndex)
 import Covenant.Plutus
-  ( PlutusTerm,
-    pApp,
+  ( pApp,
     pCase,
     pFst,
     pLam,
@@ -71,6 +70,7 @@ import PlutusCore.Name.Unique
   ( Name (Name),
     Unique (Unique),
   )
+import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 
 {- This records the information we need for our "mock" functions for catamorphisms/datatype intro/datatype elimination
 
@@ -105,7 +105,7 @@ data TyFixerFnData
       { mfTyName :: TyName,
         mfEncoding :: DataEncoding,
         mfPolyType :: CompT AbstractTy,
-        mfCompiled :: PlutusTerm,
+        mfCompiled :: Term Name DefaultUni DefaultFun (),
         mfTypeSchema :: TypeSchema,
         mfFunName :: Text,
         mfNodeKind :: TyFixerNodeKind
@@ -205,19 +205,29 @@ countToTyVars cnt
 
 -- We could probably steal the plutarch typeclass trick to get arbitrary embedded lambdas... but
 -- that's overkill here
-pFreshLam :: (MonadASG m) => (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam ::
+  (MonadASG m) =>
+  (Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam f = do
   varName <- freshName
   let argVar = pVar varName
   pLam varName <$> f argVar
 
-pFreshLam' :: (MonadASG m) => Text -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam' ::
+  (MonadASG m) =>
+  Text ->
+  (Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam' nm f = do
   varName <- freshNamePrefix nm
   let argVar = pVar varName
   pLam varName <$> f argVar
 
-pFreshLam2 :: (MonadASG m) => (PlutusTerm -> PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam2 ::
+  (MonadASG m) =>
+  (Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam2 f = do
   varName1 <- freshName
   varName2 <- freshName
@@ -230,8 +240,8 @@ pFreshLam2' ::
   (MonadASG m) =>
   Text ->
   Text ->
-  (PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
-  m PlutusTerm
+  (Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam2' vn1 vn2 f = do
   varName1 <- freshNamePrefix vn1
   varName2 <- freshNamePrefix vn2
@@ -240,7 +250,10 @@ pFreshLam2' vn1 vn2 f = do
   body <- f argVar1 argVar2
   pure $ pLam varName1 (pLam varName2 body)
 
-pFreshLam3 :: (MonadASG m) => (PlutusTerm -> PlutusTerm -> PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pFreshLam3 ::
+  (MonadASG m) =>
+  (Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam3 f = do
   v1 <- freshName
   v2 <- freshName
@@ -256,8 +269,8 @@ pFreshLam3' ::
   Text ->
   Text ->
   Text ->
-  (PlutusTerm -> PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
-  m PlutusTerm
+  (Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pFreshLam3' vn1 vn2 vn3 f = do
   v1 <- freshNamePrefix vn1
   v2 <- freshNamePrefix vn2
@@ -269,22 +282,30 @@ pFreshLam3' vn1 vn2 vn3 f = do
   pure $ pLam v1 (pLam v2 (pLam v3 body))
 
 -- This will be useful eventually
-pLetM :: (MonadASG m) => PlutusTerm -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pLetM ::
+  (MonadASG m) =>
+  Term Name DefaultUni DefaultFun () ->
+  (Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pLetM toBind withBind = do
   f <- pFreshLam withBind
   pure $ f `pApp` toBind
 
-pLetM' :: (MonadASG m) => Text -> PlutusTerm -> (PlutusTerm -> m PlutusTerm) -> m PlutusTerm
+pLetM' ::
+  (MonadASG m) =>
+  Text ->
+  Term Name DefaultUni DefaultFun () ->
+  (Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pLetM' nm toBind withBind = do
   f <- pFreshLam' nm withBind
   pure $ f `pApp` toBind
 
--- REVIEW: I can't remember whether Koz said to use a hoisted or non-hoisted fix -_-
 pFix ::
   forall (m :: Type -> Type).
   (MonadASG m) =>
-  PlutusTerm ->
-  m PlutusTerm
+  Term Name DefaultUni DefaultFun () ->
+  m (Term Name DefaultUni DefaultFun ())
 pFix f = do
   g <- pFreshLam' "fix_x" $ \r -> pure (r # r)
   h <- pFreshLam' "fix_y" (\r -> pure $ f # (r # r))
@@ -293,7 +314,7 @@ pFix f = do
 pFix' ::
   forall (m :: Type -> Type).
   (MonadASG m) =>
-  m PlutusTerm
+  m (Term Name DefaultUni DefaultFun ())
 pFix' = pFreshLam' "fix_f" $ \f -> do
   g <- pFreshLam' "fix_x" $ \r -> pure (r # r)
   h <- pFreshLam' "fix_y" (\r -> pure $ f # (r # r))
@@ -303,9 +324,9 @@ pFix' = pFreshLam' "fix_f" $ \f -> do
 pCaseList ::
   forall (m :: Type -> Type).
   (MonadASG m) =>
-  PlutusTerm ->
-  (PlutusTerm -> PlutusTerm -> m PlutusTerm) ->
-  m PlutusTerm
+  Term Name DefaultUni DefaultFun () ->
+  (Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) ->
+  m (Term Name DefaultUni DefaultFun ())
 pCaseList xs f = pCase xs . Vector.singleton <$> pFreshLam2 f
 
 -- Used to resolve some annoying inconsistencies we don't have time to fix now
@@ -325,14 +346,19 @@ pCaseListWith ::
   forall (a :: Type) (m :: Type -> Type).
   (MonadASG m) =>
   [a] -> -- Usually a list of types representing the known structure of the list
-  (a -> PlutusTerm -> m PlutusTerm) -> -- what do we do with the head of the list?
-  ([PlutusTerm] -> m PlutusTerm) -> -- what do we do with all of the list elements at the end?
-  PlutusTerm -> -- a list-typed plutus term
-  m PlutusTerm
+  (a -> Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())) -> -- what do we do with the head of the list?
+  ([Term Name DefaultUni DefaultFun ()] -> m (Term Name DefaultUni DefaultFun ())) -> -- what do we do with all of the list elements at the end?
+  Term Name DefaultUni DefaultFun () -> -- a list-typed plutus term
+  m (Term Name DefaultUni DefaultFun ())
 pCaseListWith [] _ withElems _ = withElems [] -- only thing we can do
 pCaseListWith (x : xs) withHead withElems aList = go [] aList x xs
   where
-    go :: [PlutusTerm] -> PlutusTerm -> a -> [a] -> m PlutusTerm
+    go ::
+      [Term Name DefaultUni DefaultFun ()] ->
+      Term Name DefaultUni DefaultFun () ->
+      a ->
+      [a] ->
+      m (Term Name DefaultUni DefaultFun ())
     go termAcc remList t [] = pCaseList remList $ \y _ys -> do
       yTerm <- withHead t y
       let args = termAcc <> [yTerm]
@@ -346,26 +372,30 @@ genFiniteListEliminator ::
   forall m.
   (MonadASG m) =>
   -- a Plutus term representing the branch/arm handler
-  PlutusTerm ->
+  Term Name DefaultUni DefaultFun () ->
   -- The list (usually a scrutinee for Enums or the Plutus list of ctor args for a Constr encoded thing)
-  PlutusTerm ->
+  Term Name DefaultUni DefaultFun () ->
   -- Looks up the projection/embedding/"self" function.
-  (ValT AbstractTy -> m (Maybe PlutusTerm)) ->
+  (ValT AbstractTy -> m (Maybe (Term Name DefaultUni DefaultFun ()))) ->
   -- The statically known types of all of the list elements
   [ValT AbstractTy] ->
-  m PlutusTerm
+  m (Term Name DefaultUni DefaultFun ())
 genFiniteListEliminator branchHandler aList resolveProjection elTys =
   pCaseListWith elTys withHead finalizer aList
   where
-    withHead :: ValT AbstractTy -> PlutusTerm -> m PlutusTerm
+    withHead ::
+      ValT AbstractTy ->
+      Term Name DefaultUni DefaultFun () ->
+      m (Term Name DefaultUni DefaultFun ())
     withHead ty headEl =
       resolveProjection ty >>= \case
         Just projVar -> do
           let result = pApp projVar headEl
           pure result
         Nothing -> pure headEl
-
-    finalizer :: [PlutusTerm] -> m PlutusTerm
+    finalizer ::
+      [Term Name DefaultUni DefaultFun ()] ->
+      m (Term Name DefaultUni DefaultFun ())
     finalizer = pure . foldl' pApp branchHandler
 
 {- This is a convenience helper for generating case expressions over constructor encoded datatypes which
@@ -397,14 +427,14 @@ pCaseConstrData ::
   forall m.
   (MonadASG m) =>
   -- The scrutinee to case on. Needs to be ConstrData encoded PlutusData
-  PlutusTerm ->
+  Term Name DefaultUni DefaultFun () ->
   -- A vector of types for each branch handler (in BB fn signature order)
   -- plus the corresponding handler (it will always be a variable)
-  Vector (ValT AbstractTy, PlutusTerm) ->
+  Vector (ValT AbstractTy, Term Name DefaultUni DefaultFun ()) ->
   -- A function which selects unwrappers (or self recursive calls)
   -- for a given type variable.
-  (ValT AbstractTy -> m (Maybe PlutusTerm)) ->
-  m PlutusTerm
+  (ValT AbstractTy -> m (Maybe (Term Name DefaultUni DefaultFun ()))) ->
+  m (Term Name DefaultUni DefaultFun ())
 pCaseConstrData scrutinee typedHandlers lookupShim = do
   plcHandlers <- Vector.forM typedHandlers $ \(hTy, handler) -> do
     let hArgs = case hTy of
@@ -425,22 +455,22 @@ pCaseConstrData scrutinee typedHandlers lookupShim = do
          probably do a lot better than this somehow? But this is the *easiest* way I can think of.
 
 genFiniteListEliminator :: -- The branch handler function as a plutus term
-    PlutusTerm ->
+    Term Name DefaultUni DefaultFun () ->
     -- The scrutinee (or the argument list for a Constr-encoded data thing)
-    PlutusTerm ->
+    Term Name DefaultUni DefaultFun () ->
     -- Looks up the right projection function
-    (ValT AbstractTy -> Maybe PlutusTerm) ->
+    (ValT AbstractTy -> Maybe Term Name DefaultUni DefaultFun ()) ->
     -- The types of the list elements
     [ValT AbstractTy] ->
-    PlutusTerm
+    Term Name DefaultUni DefaultFun ()
 genFiniteListEliminator branchHandler scrutinee resolveProjection elTys =
     foldl' pApp branchHandler $ genFiniteListElimArgs scrutinee elTys
   where
     genFiniteListElimArgs :: -- The "remainder" of the list (usually an application of tail to the original scrutinee)
-        PlutusTerm ->
+        Term Name DefaultUni DefaultFun () ->
         -- the types of the remainder of the list
         [ValT AbstractTy] ->
-        [PlutusTerm]
+        [Term Name DefaultUni DefaultFun ()]
     genFiniteListElimArgs remList [] = [] -- nothing left to do
     -- \/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/
     -- FIXME/TODO/REVIEW/BUG: THIS WONT WORK!!! Inside the handlers the DeBruijn index will always

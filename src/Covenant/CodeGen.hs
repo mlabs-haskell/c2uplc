@@ -14,7 +14,6 @@ import Covenant.CodeGen.Common
   )
 import Covenant.ExtendedASG (wrapASG)
 import Covenant.JSON (CompilationUnit (CompilationUnit))
-import Covenant.Plutus (PlutusTerm)
 import Covenant.Test (unsafeMkDatatypeInfos)
 import Covenant.Transform (transformASG)
 import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes), runCodeGen)
@@ -26,6 +25,7 @@ import PlutusCore (Name)
 import PlutusCore qualified as PLC
 import PlutusCore.Evaluation.Machine.ExBudgetingDefaults (defaultCekParametersForTesting)
 import Prettyprinter (Doc, pretty)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
 
 compilePretty ::
@@ -37,7 +37,7 @@ compilePretty = fmap pretty . compile
 
    See: https://github.com/Plutonomicon/plutarch-plutus/blob/treasury-milestone-3/Plutarch/Internal/Term.hs#L829-L853
 -}
-compile :: CompilationUnit -> Either CodeGenError PlutusTerm
+compile :: CompilationUnit -> Either CodeGenError (Term Name DefaultUni DefaultFun ())
 compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runCodeGen (wrapASG asg) $ do
   cgData <- transformASG datatypes
   runTopDownCompile cgData >>= \case
@@ -52,7 +52,9 @@ compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runC
 -- Returns a pretty error bundle (or at least, like, a string-ey error bundle)
 -- or the evaluated term
 
-evalTerm :: PlutusTerm -> Either String PlutusTerm
+evalTerm ::
+  Term Name DefaultUni DefaultFun () ->
+  Either String (Term Name DefaultUni DefaultFun ())
 evalTerm t = case errOrRes of
   Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log'
   Right res -> pure res
@@ -61,10 +63,10 @@ evalTerm t = case errOrRes of
 
 -- no budget, don't care yet
 evalTerm' ::
-  PlutusTerm ->
+  Term Name DefaultUni DefaultFun () ->
   ( Either
       (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
-      PlutusTerm,
+      (Term Name DefaultUni DefaultFun ()),
     [Text]
   )
 evalTerm' t =

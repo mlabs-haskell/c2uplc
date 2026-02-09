@@ -38,7 +38,7 @@ import Covenant.Constant
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (count0, count1, ix0, ix1)
 import Covenant.JSON (CompilationUnit (CompilationUnit), Version (Version))
-import Covenant.Plutus (PlutusTerm, prettyPTerm)
+import Covenant.Plutus (prettyPTerm)
 import Covenant.Prim (TwoArgFunc (AddInteger))
 import Covenant.Test (ledgerTypes, list, unsafeMkDatatypeInfos)
 import Covenant.Type
@@ -75,6 +75,7 @@ import Data.Void (Void)
 import Data.Wedge (Wedge (There))
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 main :: IO ()
 main =
@@ -185,7 +186,7 @@ testCompile ::
   forall a.
   Vector (DataDeclaration AbstractTy) ->
   ASGBuilder a ->
-  Either String PlutusTerm
+  Either String (Term Name DefaultUni DefaultFun ())
 testCompile dtDict builder = case mkASG dtDict builder of
   Left asgErr -> Left $ show (ASGConstructionFail asgErr)
   Right cu -> case compile cu of

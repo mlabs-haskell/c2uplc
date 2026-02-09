@@ -12,8 +12,7 @@ import Covenant.Data (DatatypeInfo (DatatypeInfo), mkMatchFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z))
 import Covenant.Index (ix0, ix1, ix2)
 import Covenant.Plutus
-  ( PlutusTerm,
-    pApp,
+  ( pApp,
     pCase,
     pForce,
     pLam,
@@ -76,6 +75,7 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Optics.Core (view)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 {- NOTE: The type of the "function part" is just going to be the BBF (plus unwrappers),
          since we always apply the scrutinee and handler functions "all at once" with the
@@ -162,7 +162,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
       Text ->
       DataEncoding ->
       TypeSchema ->
-      m PlutusTerm
+      m (Term Name DefaultUni DefaultFun ())
     genElimFormPLC (CompN _ (ArgsAndResult origMatchFnArgs _)) nameBase enc schema = do
       -- These are the FULL arguments to the function (not the synthetic type we use for analysis),
       -- and this comes from the schema generator. This type includes projection/embedding functions, the
@@ -174,29 +174,31 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
       let lamArgVars = pVar <$> lamArgNames
           -- This is a function that takes a PLC lambda body for the match function and
           -- and returns a PLC lambda.
-          lamBuilder :: PlutusTerm -> PlutusTerm
+          lamBuilder :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
           lamBuilder = foldl' (\g argN -> g . pLam argN) id lamArgNames
           {- NOTE: It's important to keep in mind here that for an arbitrary ADT, the
                    generated match function has a regular structure: The scrutinee comes first, then
                    all of the branch handlers. Because each term var bound by the lambda corresponds to a type
                    arg, we can use this to derive references to each branch handler directly.
           -}
-          scrutinee :: PlutusTerm
+          scrutinee :: Term Name DefaultUni DefaultFun ()
           scrutinee = pVar $ lamArgNames Vector.! 0
 
           -- We ignore the "extra unwrapper args" here because we're trying to get the names of the handlers for each
           -- match arm (and we have another way of looking up the unwrappers when we need to)
-          rawBranchHandlers :: Vector PlutusTerm
+          rawBranchHandlers :: Vector (Term Name DefaultUni DefaultFun ())
           rawBranchHandlers =
             let numHandlers = Vector.length origMatchFnArgs - 1
              in pVar <$> Vector.slice 1 numHandlers lamArgNames
 
           -- inserts forces if the types say we need them
-          insertForce :: (ValT AbstractTy, PlutusTerm) -> (ValT AbstractTy, PlutusTerm)
+          insertForce ::
+            (ValT AbstractTy, Term Name DefaultUni DefaultFun ()) ->
+            (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           insertForce (v, t) = case v of
             ThunkT {} -> (v, pForce t)
             _ -> (v, t)
-          typedBranchHandlers :: Vector (ValT AbstractTy, PlutusTerm)
+          typedBranchHandlers :: Vector (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           typedBranchHandlers = insertForce <$> Vector.zip (Vector.drop 1 origMatchFnArgs) rawBranchHandlers
 
           (_, branchHandlers) = Vector.unzip typedBranchHandlers
@@ -208,7 +210,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
         DataSchema _ handlerArgPosDict -> do
           -- This lets us look up the name (i.e. the var bound by our lambda) which corresponds to the
           -- projection/embedding function we need to use for a particular value with a bare tyvar type
-          let resolveUnwrapper :: ValT AbstractTy -> m (Maybe PlutusTerm)
+          let resolveUnwrapper :: ValT AbstractTy -> m (Maybe (Term Name DefaultUni DefaultFun ()))
               resolveUnwrapper = resolvePolyRepHandler MatchNode handlerArgPosDict lamArgVars Nothing
 
           case enc of

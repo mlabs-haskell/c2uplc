@@ -46,8 +46,7 @@ import Covenant.ExtendedASG
     runWithEmptyASG,
   )
 import Covenant.Plutus
-  ( PlutusTerm,
-    caseConstrEnum,
+  ( caseConstrEnum,
     pBuiltin,
     pCase,
     pCons,
@@ -144,6 +143,7 @@ import PlutusCore.Default
   )
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
+import UntypedPlutusCore (DefaultFun, Term)
 
 {- This module contains PLC fragments which are needed for code generation but cannot be written directly in
    Covenant.
@@ -231,7 +231,7 @@ defStubs = do
 _cataNat :: forall m. (MonadStub m) => m ()
 _cataNat = declare "cataNat" body
   where
-    body :: m PlutusTerm
+    body :: m (Term Name DefaultUni DefaultFun ())
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
       recNat <- resolveStub "recNat"
       let nIsNegative = n #< pInt 0
@@ -245,7 +245,7 @@ _cataNat = declare "cataNat" body
 _cataNeg :: forall m. (MonadStub m) => m ()
 _cataNeg = declare "cataNeg" body
   where
-    body :: m PlutusTerm
+    body :: m (Term Name DefaultUni DefaultFun ())
     body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
       pNot <- resolveStub "not"
       recNeg <- resolveStub "recNeg"
@@ -263,7 +263,7 @@ _cataByteString = declare "cataByteString" $ do
   body <- go
   pure $ fix # body
   where
-    go :: m PlutusTerm
+    go :: m (Term Name DefaultUni DefaultFun ())
     go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
       pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
         pure $
@@ -297,7 +297,12 @@ _cataList = declare "cataList" $ do
 -- | This produces the correct empty list term directly and doesn't declare anything.
 --  After pre-evaluation this will just reduce to the constant anyway. A 'Nothing' means
 --  we cannot construct a builtin list of elements of that type.
-mkNil :: forall m. (MonadStub m) => Map TyName (DatatypeInfo AbstractTy) -> ValT AbstractTy -> m (Maybe PlutusTerm)
+mkNil ::
+  forall m.
+  (MonadStub m) =>
+  Map TyName (DatatypeInfo AbstractTy) ->
+  ValT AbstractTy ->
+  m (Maybe (Term Name DefaultUni DefaultFun ()))
 mkNil dtDict valT
   | listOfPairs valT = do
       let selectNilNm = selectNilName pairData
@@ -355,7 +360,10 @@ _matchData = declare "matchData" $
           # (pForce goI # (pBuiltin UnIData # dat))
           # (pForce goB # (pBuiltin UnBData # dat))
   where
-    asCtor :: PlutusTerm -> PlutusTerm -> m PlutusTerm
+    asCtor ::
+      Term Name DefaultUni DefaultFun () ->
+      Term Name DefaultUni DefaultFun () ->
+      m (Term Name DefaultUni DefaultFun ())
     asCtor goCtor scrut = do
       pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
         let ctorIx = pFst scrutAsIntDataPair
@@ -380,7 +388,7 @@ _matchPair = declare "matchPair" $
 
 data StubContext
   = StubContext
-  { _bindings :: Map Text (Name, PlutusTerm, Id), -- not everything actually needs an Id
+  { _bindings :: Map Text (Name, Term Name DefaultUni DefaultFun (), Id), -- not everything actually needs an Id
     _deps :: Map Text (Set Text), -- an adjacency list, basically
     _depsAcc :: Set Text
   }
@@ -428,20 +436,20 @@ instance (Monad m) => HasStubError (StubM m) where
 -- that i am not going to bother trying to explicate here
 class (MonadASG m, HasStubError m) => MonadStub m where
   -- Must log the name in to the present context
-  stubData :: Text -> m (Name, PlutusTerm, Id)
+  stubData :: Text -> m (Name, Term Name DefaultUni DefaultFun (), Id)
 
   -- Do we have a stub associated with the name provided?
   stubExists :: Text -> m Bool
 
   -- Don't use this directly! Use 'declare'
-  _bindStub :: Text -> PlutusTerm -> m ()
+  _bindStub :: Text -> Term Name DefaultUni DefaultFun () -> m ()
 
   -- This is "treat this action as a top level declaration", i.e.,
   -- run it with an empty "current scope" (the depsAcc field in StubContext)
   asTopLevel :: forall a. m a -> m a
 
 instance (MonadASG m) => MonadStub (StubM m) where
-  stubData :: Text -> StubM m (Name, PlutusTerm, Id)
+  stubData :: Text -> StubM m (Name, Term Name DefaultUni DefaultFun (), Id)
   stubData nm = do
     StubContext bs _ _ <- StubM get
     case M.lookup nm bs of
@@ -456,7 +464,7 @@ instance (MonadASG m) => MonadStub (StubM m) where
     pure $ M.member nm bs
 
   -- Don't use this directly!
-  _bindStub :: Text -> PlutusTerm -> StubM m ()
+  _bindStub :: Text -> Term Name DefaultUni DefaultFun () -> StubM m ()
   _bindStub nm stub = do
     StubContext bs ds acc <- StubM get
     let resolvedDeps = map (\x -> (x, M.lookup x ds)) (S.toList acc)
@@ -493,7 +501,12 @@ instance (MonadStub m) => MonadStub (ExceptT e m) where
   asTopLevel (ExceptT comp) = ExceptT $ asTopLevel comp
   _bindStub nm term = lift $ _bindStub nm term
 
-declare :: forall m. (MonadStub m) => Text -> m PlutusTerm -> m ()
+declare ::
+  forall m.
+  (MonadStub m) =>
+  Text ->
+  m (Term Name DefaultUni DefaultFun ()) ->
+  m ()
 declare nm mkStub =
   stubExists nm >>= \case
     True -> pure ()
@@ -505,7 +518,7 @@ declare nm mkStub =
 -- | This gets a variable reference to the stub, it does not
 --  return the body of the stub. Compilation of the bodies is handled "automagically"
 --  by compileStubM
-resolveStub :: (MonadStub m) => Text -> m PlutusTerm
+resolveStub :: (MonadStub m) => Text -> m (Term Name DefaultUni DefaultFun ())
 resolveStub nmTxt = do
   (pName, _, _) <- stubData nmTxt
   pure $ pVar pName
@@ -522,7 +535,12 @@ runStubM (StubM scope) (StubM act') = do
     act = scope >> act'
 
 -- this let-binds all of the dependencies after performing dependency analysis. ugh
-compileStubM :: forall m. (MonadASG m) => StubM m () -> StubM m PlutusTerm -> m (Either StubError PlutusTerm)
+compileStubM ::
+  forall m.
+  (MonadASG m) =>
+  StubM m () ->
+  StubM m (Term Name DefaultUni DefaultFun ()) ->
+  m (Either StubError (Term Name DefaultUni DefaultFun ()))
 compileStubM scope act =
   runStubM scope act >>= \case
     Left e -> pure (Left e)
@@ -542,19 +560,21 @@ compileStubM scope act =
   where
     letBindEm ::
       forall a.
-      Map Text (Name, PlutusTerm, a) ->
+      Map Text (Name, Term Name DefaultUni DefaultFun (), a) ->
       Text ->
-      Either StubError PlutusTerm ->
-      Either StubError PlutusTerm
+      Either StubError (Term Name DefaultUni DefaultFun ()) ->
+      Either StubError (Term Name DefaultUni DefaultFun ())
     letBindEm dict txtNm acc = case M.lookup txtNm dict of
       Nothing -> Left $ NoBinding txtNm
       Just (pNm, body, _) -> pLet pNm body <$> acc
 
 -- for testing
-compileStub' :: (forall m. (MonadASG m) => StubM m PlutusTerm) -> Either StubError PlutusTerm
+compileStub' ::
+  (forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())) ->
+  Either StubError (Term Name DefaultUni DefaultFun ())
 compileStub' act = runWithEmptyASG compiled
   where
-    compiled :: forall m. (MonadASG m) => m (Either StubError PlutusTerm)
+    compiled :: forall m. (MonadASG m) => m (Either StubError (Term Name DefaultUni DefaultFun ()))
     compiled = compileStubM defStubs act
 
 data HandlerType = Proj | Embed
@@ -567,7 +587,7 @@ trySelectHandler ::
   Map TyName (DatatypeInfo AbstractTy) ->
   HandlerType ->
   ValT AbstractTy ->
-  m (Maybe PlutusTerm)
+  m (Maybe (Term Name DefaultUni DefaultFun ()))
 trySelectHandler dtDict htype valT = case valT of
   BuiltinFlat bi -> case htype of
     Proj -> case bi of
@@ -646,14 +666,13 @@ _embedList = declare "embedList" fun
   where
     listify x = pBuiltin ListData # x
     -- morally: Integer -> ((a -> b) -> List a -> List b) -> ... (can't express this without dep types see above)
-    mkGo :: m PlutusTerm
+    mkGo :: m (Term Name DefaultUni DefaultFun ())
     mkGo =
       pFreshLam3' "go_Depth" "go_embEl" "go_mapF" $ \depth embEl mapF -> do
         recNat <- resolveStub "recNat"
         goS <- pFreshLam2' "f" "xs" $ \f xs -> pure $ listify (mapF # f # xs)
         pure $ recNat # embEl # goS # depth
-
-    fun :: m PlutusTerm
+    fun :: m (Term Name DefaultUni DefaultFun ())
     fun = pFreshLam3' "fun_Depth" "fun_embEl" "fun_xs" $ \depth innerF xs -> do
       map' <- resolveStub "map"
       pLetM (map' # pNilData) $ \mapF -> do
@@ -684,18 +703,18 @@ Don't use this directly. Use projListWithType
 projList ::
   forall (m :: Type -> Type) (a :: Type).
   (MonadStub m) =>
-  DefaultUni (Esc a) -> m PlutusTerm
+  DefaultUni (Esc a) -> m (Term Name DefaultUni DefaultFun ())
 projList wit = body
   where
-    body :: m PlutusTerm
+    body :: m (Term Name DefaultUni DefaultFun ())
     body = pFreshLam2' "projEl" "depth" $ \projEl depth -> do
       mkNil' <- resolveStub (selectNilName wit)
       go <- mkGo mkNil'
       pure $ go # depth # projEl
-    unList :: PlutusTerm -> PlutusTerm
+    unList :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
     unList t = pBuiltin UnListData # t
     -- Integer -> (Data -> a) -> Data -> [a]
-    mkGo :: PlutusTerm -> m PlutusTerm
+    mkGo :: Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())
     mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
       recNat <- resolveStub "recNatN"
       mapF <- resolveStub "map"
@@ -712,7 +731,7 @@ projListWithType ::
   (MonadStub m) =>
   Map TyName (DatatypeInfo AbstractTy) ->
   ValT AbstractTy ->
-  PlutusTerm ->
+  Term Name DefaultUni DefaultFun () ->
   m ()
 projListWithType dtDict valT projEl = case analyzeListTy dtDict valT of
   Nothing -> error $ "Cannot create list projection for " <> pValT valT
@@ -947,7 +966,7 @@ _recList = declare "recList" $ do
     pure $ fix # f
 
 {-
-   The PlutusTerm argument is a *correctly typed UPLC empty list constant*.
+   The Term Name DefaultUni DefaultFun () argument is a *correctly typed UPLC empty list constant*.
 
    This is almost incomprehensibly stupid, but we need to pass that around as an arguments.
    PLC is immutable (obviously) so `map` constructs a new list and it is impossible to do that
@@ -1005,7 +1024,7 @@ mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
   where
     declNm = selectNilName uni
 
-    mkList :: Int -> PlutusTerm
+    mkList :: Int -> Term Name DefaultUni DefaultFun ()
     mkList n = case mkWitness n of
       MkListProof wit -> mkConstantOf () wit []
 
@@ -1043,5 +1062,5 @@ _or = declare "or" $ pFreshLam2 $ \b1 b2 ->
     *************
 -}
 
-pInt :: Integer -> PlutusTerm
+pInt :: Integer -> Term Name DefaultUni DefaultFun ()
 pInt = mkConstant ()

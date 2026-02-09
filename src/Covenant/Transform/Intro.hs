@@ -11,8 +11,7 @@ import Covenant.Data (DatatypeInfo)
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (Count, ix0, ix1)
 import Covenant.Plutus
-  ( PlutusTerm,
-    listData,
+  ( listData,
     pApp,
     pConstr,
     pDelay,
@@ -83,6 +82,7 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Optics.Core (view)
+import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 -- TODO: Better comments (tho fortunately this one is the most straightforward)
 
@@ -132,7 +132,7 @@ mkConstructorFunctions tn =
           DataEncoding ->
           TypeSchema ->
           Int ->
-          m PlutusTerm
+          m (Term Name DefaultUni DefaultFun ())
         genIntroFormPLC dataEnc schema ctorIx = do
           let introFnArgs = case schema of
                 SOPSchema (CompN _ (ArgsAndResult args _)) -> args
@@ -152,7 +152,7 @@ mkConstructorFunctions tn =
             DataSchema _ handlerArgPosDict -> do
               {- We need to resolve embeddings for both type variables *and* statically known concrete builtin types.
               -}
-              let resolveEmbedding :: ValT AbstractTy -> m (Maybe PlutusTerm)
+              let resolveEmbedding :: ValT AbstractTy -> m (Maybe (Term Name DefaultUni DefaultFun ()))
                   resolveEmbedding = resolvePolyRepHandler IntroNode handlerArgPosDict lamArgVars Nothing
               handledCtorArgs <- Vector.forM nameTyPairs $ \(cArgNm, cArgTy) ->
                 resolveEmbedding cArgTy >>= \case
