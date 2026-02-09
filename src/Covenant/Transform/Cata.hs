@@ -23,14 +23,7 @@ import Covenant.Transform.Common
   ( BuiltinFnData (List_Cata),
     TyFixerFnData
       ( BuiltinTyFixer,
-        TyFixerFnData,
-        mfCompiled,
-        mfEncoding,
-        mfFunName,
-        mfNodeKind,
-        mfPolyType,
-        mfTyName,
-        mfTypeSchema
+        TyFixerFnData
       ),
     TyFixerNodeKind (CataNode),
     countToTyVars,
@@ -120,16 +113,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 let schema = mkTypeSchema False enc cataFunTy
                     cataFunName = "cata_" <> tyNameInner
                 compiled <- pFix =<< genCataPLC cataFunTy cataFunName enc schema
-                let here =
-                      TyFixerFnData
-                        { mfTyName = tn,
-                          mfEncoding = enc,
-                          mfPolyType = cataFunTy,
-                          mfCompiled = compiled,
-                          mfTypeSchema = schema,
-                          mfFunName = cataFunName,
-                          mfNodeKind = CataNode
-                        }
+                let here = TyFixerFnData tn enc cataFunTy compiled schema cataFunName CataNode
                 pure . Just $ here
     genCataPLC ::
       CompT AbstractTy ->

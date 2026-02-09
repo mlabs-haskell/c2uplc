@@ -27,12 +27,7 @@ import Covenant.ExtendedASG
     tyFixerFnId,
   )
 import Covenant.Test (Arg (UnsafeMkArg), ValNodeInfo (AppInternal))
-import Covenant.Transform.Common
-  ( cataData,
-    introData,
-    matchData,
-    tyFixerFnTy,
-  )
+import Covenant.Transform.Common ()
 import Covenant.Transform.Pipeline.Common
   ( TransformState,
     UniqueError (UniqueError),
@@ -159,10 +154,10 @@ transformTypeFixerNodes = do
                       Nothing -> case cataT of
                         (CompN _ (Datatype bfTn _ :--:> ReturnT _)) -> M.lookup bfTn tyFixers
                         _ -> Nothing
-                case cataData =<< getTyFixer of
+                case view #cataData =<< getTyFixer of
                   Nothing -> error $ "Fatal Error: No type fixer function data for catamorphisms on " <> show tn
                   Just dat -> do
-                    let cataFnPolyTy = tyFixerFnTy dat
+                    let cataFnPolyTy = view #fnTy dat
                     cataId <- tyFixerFnId
                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId cataId) dat)
                     handlerTypes <- traverse unsafeRefType (Vector.toList handlers)
@@ -185,12 +180,12 @@ transformTypeFixerNodes = do
                 handlerTypes <- traverse unsafeRefType $ Vector.toList handlers
                 let tn = unsafeDatatypeName scrutTy
                 tyFixers <- gets (R..! #tyFixerData)
-                case matchData =<< M.lookup tn tyFixers of
+                case view #matchData =<< M.lookup tn tyFixers of
                   Nothing ->
                     error $
                       "Fatal Error: No type fixer function data for pattern matches on " <> show tn
                   Just dat -> do
-                    let matchFnPolyTy = tyFixerFnTy dat
+                    let matchFnPolyTy = view #fnTy dat
                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId matchId) dat)
                     let matchFnConcrete = applyArgs matchFnPolyTy (scrutTy : handlerTypes)
                         newValNode = AppInternal (forgetExtendedId matchId) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
@@ -204,7 +199,7 @@ transformTypeFixerNodes = do
               DataConstructor tn ctorName ctorArgs -> do
                 argTys <- traverse unsafeRefType $ Vector.toList ctorArgs
                 tyFixers <- gets (R..! #tyFixerData)
-                case introData <$> M.lookup tn tyFixers of
+                case view #introData <$> M.lookup tn tyFixers of
                   Nothing ->
                     error $
                       "Fatal Error: No type fixer function data for datatype introductions for type " <> show tn
@@ -214,7 +209,7 @@ transformTypeFixerNodes = do
                       Just ctorIx -> do
                         ctorFnId <- tyFixerFnId
                         let dat = constrFunctions Vector.! ctorIx
-                            ctorFnPolyTy = tyFixerFnTy dat
+                            ctorFnPolyTy = view #fnTy dat
                             ctorFnConcrete = applyArgs ctorFnPolyTy argTys
                             newValNode = AppInternal (forgetExtendedId ctorFnId) ctorArgs Vector.empty ctorFnConcrete
                             newASGNode = AValNode valT newValNode

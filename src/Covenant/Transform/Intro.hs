@@ -34,14 +34,7 @@ import Covenant.Transform.Common
       ),
     TyFixerFnData
       ( BuiltinTyFixer,
-        TyFixerFnData,
-        mfCompiled,
-        mfEncoding,
-        mfFunName,
-        mfNodeKind,
-        mfPolyType,
-        mfTyName,
-        mfTypeSchema
+        TyFixerFnData
       ),
     TyFixerNodeKind (IntroNode),
     countToTyVars,
@@ -116,16 +109,7 @@ mkConstructorFunctions tn =
           schema = mkTypeSchema True enc ctorFnTy
           funName = cName
       compiled <- genIntroFormPLC enc schema cIx
-      let here =
-            TyFixerFnData
-              { mfTyName = tn,
-                mfEncoding = enc,
-                mfPolyType = ctorFnTy,
-                mfCompiled = compiled,
-                mfTypeSchema = schema,
-                mfFunName = funName,
-                mfNodeKind = IntroNode
-              }
+      let here = TyFixerFnData tn enc ctorFnTy compiled schema funName IntroNode
       pure $ Vector.snoc acc here
       where
         genIntroFormPLC ::

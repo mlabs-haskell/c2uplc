@@ -29,14 +29,7 @@ import Covenant.Transform.Common
       ),
     TyFixerFnData
       ( BuiltinTyFixer,
-        TyFixerFnData,
-        mfCompiled,
-        mfEncoding,
-        mfFunName,
-        mfNodeKind,
-        mfPolyType,
-        mfTyName,
-        mfTypeSchema
+        TyFixerFnData
       ),
     TyFixerNodeKind (MatchNode),
     genFiniteListEliminator,
@@ -138,16 +131,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
             let schema = mkTypeSchema False enc matchFunTy
             let matchFunName = "match_" <> tyNameInner
             compiled <- genElimFormPLC matchFunTy matchFunName enc schema
-            let here =
-                  TyFixerFnData
-                    { mfTyName = tn,
-                      mfEncoding = enc,
-                      mfPolyType = matchFunTy,
-                      mfCompiled = compiled,
-                      mfTypeSchema = schema,
-                      mfFunName = matchFunName,
-                      mfNodeKind = MatchNode
-                    }
+            let here = TyFixerFnData tn enc matchFunTy compiled schema matchFunName MatchNode
             pure . Just $ here
     {- IMPORTANT NOTE: While *here* we are working with a generated match function with branch handler
                        arguments that will NOT be thunked for nullary constructors (i.e. the type of a
