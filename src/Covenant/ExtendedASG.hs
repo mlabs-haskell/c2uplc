@@ -27,7 +27,12 @@ module Covenant.ExtendedASG
 where
 
 import Control.Monad.Except (ExceptT)
-import Control.Monad.RWS.Strict (MonadState (get, put), MonadTrans (lift), RWST)
+import Control.Monad.RWS.Strict
+  ( MonadState (get, put),
+    MonadTrans (lift),
+    RWS,
+    RWST,
+  )
 import Control.Monad.State.Strict (State, evalState)
 import Covenant.ASG (ASGNode, Id)
 import Covenant.Test (Id (UnsafeMkId))
@@ -169,6 +174,10 @@ instance (Monoid w, MonadASG m) => MonadASG (RWST r w s m) where
 instance (MonadASG m) => MonadASG (ExceptT e m) where
   getASG = lift getASG
   putASG = lift . putASG
+
+instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
+  getASG = get
+  putASG = put
 
 -- test util
 runWithEmptyASG :: forall r. (forall m. (MonadASG m) => m r) -> r

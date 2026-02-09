@@ -24,8 +24,12 @@ where
 
 import Algebra.Graph.AdjacencyMap (fromAdjacencySets)
 import Algebra.Graph.AdjacencyMap.Algorithm (Cycle, reachable, topSort)
-import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
-import Control.Monad.RWS.Strict (RWST)
+import Control.Monad.Except
+  ( ExceptT (ExceptT),
+    MonadError (throwError),
+    runExceptT,
+  )
+import Control.Monad.RWS.Strict (RWST (RWST))
 import Control.Monad.State.Strict
   ( MonadState (get, put),
     MonadTrans (lift),
@@ -475,6 +479,19 @@ instance (MonadASG m) => MonadStub (StubM m) where
     res <- act
     StubM $ modify' $ \(StubContext a b _) -> StubContext a b acc
     pure res
+
+instance (Monoid w, MonadStub m) => MonadStub (RWST r w s m) where
+  stubData = lift . stubData
+  stubExists = lift . stubExists
+  asTopLevel (RWST comp) = RWST $ \r s -> do
+    asTopLevel (comp r s)
+  _bindStub nm term = lift $ _bindStub nm term
+
+instance (MonadStub m) => MonadStub (ExceptT e m) where
+  stubData = lift . stubData
+  stubExists = lift . stubExists
+  asTopLevel (ExceptT comp) = ExceptT $ asTopLevel comp
+  _bindStub nm term = lift $ _bindStub nm term
 
 declare :: forall m. (MonadStub m) => Text -> m PlutusTerm -> m ()
 declare nm mkStub =

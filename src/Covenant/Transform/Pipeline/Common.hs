@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE StrictData #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Covenant.Transform.Pipeline.Common
   ( CodeGenData,
@@ -14,8 +13,8 @@ module Covenant.Transform.Pipeline.Common
   )
 where
 
-import Control.Monad.RWS.Strict (MonadReader, RWS, ask, put)
-import Control.Monad.State.Strict (MonadState (get), State, gets, modify')
+import Control.Monad.RWS.Strict (MonadReader, ask)
+import Control.Monad.State.Strict (MonadState, State, gets, modify')
 import Covenant.ASG
   ( ASGNode (ACompNode),
     Id,
@@ -70,10 +69,6 @@ type ConcretifyCxt =
     .+ "appPath" .== Vector AppId
     .+ "tyFixers" .== Map Id TyFixerFnData
     .+ "datatypes" .== Datatypes
-
-instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
-  getASG = get
-  putASG = put
 
 type TransformState =
   "visited" .== Set ExtendedId

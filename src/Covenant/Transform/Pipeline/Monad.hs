@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
-
 module Covenant.Transform.Pipeline.Monad
   ( PassM,
     CodeGen,
@@ -16,15 +14,9 @@ module Covenant.Transform.Pipeline.Monad
 where
 
 import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT)
-import Control.Monad.RWS.Strict
-  ( MonadReader (ask),
-    RWST,
-    lift,
-    runRWST,
-    tell,
-  )
+import Control.Monad.RWS.Strict (MonadReader, RWST, runRWST)
 import Control.Monad.State.Strict
-  ( MonadState (get, put),
+  ( MonadState (get),
     State,
     evalState,
     modify',
@@ -35,14 +27,10 @@ import Covenant.CodeGen.Stubs
     MonadStub,
     StubError,
     StubM,
-    asTopLevel,
     compileStubM,
     defStubs,
-    stubData,
-    stubExists,
     stubId,
     trySelectHandler,
-    _bindStub,
   )
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG
@@ -101,33 +89,6 @@ import Data.Void (Void, absurd)
    This seems like the most sensible solution given the time constraints. A free monad or effects library
    is probably the right choice, but I haven't touched those in years, so this will have to do.
 -}
-
-instance (Monoid w, MonadStub m) => MonadStub (RWST r w s m) where
-  stubData = lift . stubData
-
-  stubExists = lift . stubExists
-
-  -- I don't like this way of implementing this but I am not really sure what else to do.
-  -- @Koz any better ideas? :-(
-  asTopLevel act = do
-    r <- ask
-    s <- get
-    (res, s', w) <- lift $ runRWST act r s
-    tell w
-    put s'
-    pure res
-
-  _bindStub nm term = lift $ _bindStub nm term
-
-instance (MonadStub m) => MonadStub (ExceptT e m) where
-  stubData = lift . stubData
-
-  stubExists = lift . stubExists
-
-  -- I hope?
-  asTopLevel act = ExceptT $ asTopLevel (runExceptT act)
-
-  _bindStub nm term = lift $ _bindStub nm term
 
 newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
   deriving
