@@ -34,14 +34,7 @@ import Covenant.Transform.Common
       ),
     TyFixerFnData
       ( BuiltinTyFixer,
-        TyFixerFnData,
-        mfCompiled,
-        mfEncoding,
-        mfFunName,
-        mfNodeKind,
-        mfPolyType,
-        mfTyName,
-        mfTypeSchema
+        TyFixerFnData
       ),
     TyFixerNodeKind (IntroNode),
     countToTyVars,
@@ -61,7 +54,6 @@ import Covenant.Transform.Schema
   )
 import Covenant.Type
   ( AbstractTy,
-    BuiltinFlatT (ByteStringT, IntegerT),
     CompT (Comp0, Comp1, Comp2, CompN),
     CompTBody (ArgsAndResult, ReturnT, (:--:>)),
     Constructor (Constructor),
@@ -70,7 +62,9 @@ import Covenant.Type
     DataEncoding (BuiltinStrategy, PlutusData, SOP),
     PlutusDataStrategy (ConstrData, EnumData, NewtypeData, ProductListData),
     TyName (TyName),
-    ValT (BuiltinFlat, Datatype),
+    ValT (Datatype),
+    byteStringT,
+    integerT,
     tyvar,
   )
 import Data.Foldable
@@ -116,16 +110,7 @@ mkConstructorFunctions tn =
           schema = mkTypeSchema True enc ctorFnTy
           funName = cName
       compiled <- genIntroFormPLC enc schema cIx
-      let here =
-            TyFixerFnData
-              { mfTyName = tn
-              , mfEncoding = enc
-              , mfPolyType = ctorFnTy
-              , mfCompiled = compiled
-              , mfTypeSchema = schema
-              , mfFunName = funName
-              , mfNodeKind = IntroNode
-              }
+      let here = TyFixerFnData tn enc ctorFnTy compiled schema funName IntroNode
       pure $ Vector.snoc acc here
       where
         genIntroFormPLC ::
@@ -210,14 +195,14 @@ builtinIntroForm _ (TyName tn) ctorNm = case tn of
       pure $ BuiltinTyFixer nilTy List_Nil
     _ -> unsupported
   "Data" -> case ctorNm of
-    "I" -> mkDataIntro intT Data_I
+    "I" -> mkDataIntro integerT Data_I
     "B" -> mkDataIntro byteStringT Data_B
     "Map" -> mkDataIntro (listT (pairT dataT dataT)) Data_Map
     "List" -> mkDataIntro (listT dataT) Data_List
     "Constr" ->
       pure
         . BuiltinTyFixer
-          (Comp0 $ intT :--:> listT dataT :--:> ReturnT dataT)
+          (Comp0 $ integerT :--:> listT dataT :--:> ReturnT dataT)
         $ Data_Constr
     _ -> unsupported
   "Map" -> case ctorNm of
@@ -230,33 +215,24 @@ builtinIntroForm _ (TyName tn) ctorNm = case tn of
   where
     unsupported :: forall a. m a
     unsupported = error $ T.unpack ctorNm <> " is not a valid constructor of " <> T.unpack tn
-
     mapIntroSig :: CompT AbstractTy
     mapIntroSig = Comp2 $ listT (pairT a b) :--:> ReturnT (mapT a b)
-
     pairIntroSig :: CompT AbstractTy
     pairIntroSig = Comp2 $ a :--:> b :--:> ReturnT (pairT a b)
-
     mkDataIntro :: ValT AbstractTy -> BuiltinFnData -> m TyFixerFnData
     mkDataIntro t dat = pure $ BuiltinTyFixer (Comp0 $ t :--:> ReturnT dataT) dat
-
     dataT :: ValT AbstractTy
     dataT = dt "Data" []
-
     listT :: ValT AbstractTy -> ValT AbstractTy
     listT t = dt "List" [t]
-
     pairT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
     pairT x y = dt "Pair" [x, y]
-
     -- The ADT not the ctor of data
     mapT :: ValT AbstractTy -> ValT AbstractTy -> ValT AbstractTy
     mapT k v = dt "Map" [k, v]
-
-    intT = BuiltinFlat IntegerT
-    byteStringT = BuiltinFlat ByteStringT
-
+    a :: ValT AbstractTy
     a = tyvar Z ix0
+    b :: ValT AbstractTy
     b = tyvar Z ix1
-
+    dt :: TyName -> Vector (ValT a) -> ValT a
     dt = Datatype

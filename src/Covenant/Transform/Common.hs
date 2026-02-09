@@ -8,7 +8,6 @@ module Covenant.Transform.Common
   ( TyFixerFnData (..),
     TyFixerNodeKind (..),
     TyFixerDataBundle (..),
-    tyFixerFnTy,
     nextId,
     freshName,
     freshNamePrefix,
@@ -62,7 +61,15 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Optics.Core (preview, review)
+import Optics.Core
+  ( A_Lens,
+    An_AffineTraversal,
+    LabelOptic (labelOptic),
+    atraversal,
+    lens,
+    preview,
+    review,
+  )
 import PlutusCore.Name.Unique
   ( Name (Name),
     Unique (Unique),
@@ -99,20 +106,127 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 -}
 data TyFixerFnData
   = TyFixerFnData
-      { mfTyName :: TyName
-      , mfEncoding :: DataEncoding
-      , mfPolyType :: CompT AbstractTy
-      , mfCompiled :: Term Name DefaultUni DefaultFun ()
-      , mfTypeSchema :: TypeSchema
-      , mfFunName :: Text
-      , mfNodeKind :: TyFixerNodeKind
+      { _mfTyName :: TyName
+      , _mfEncoding :: DataEncoding
+      , _mfPolyType :: CompT AbstractTy
+      , _mfCompiled :: Term Name DefaultUni DefaultFun ()
+      , _mfTypeSchema :: TypeSchema
+      , _mfFunName :: Text
+      , _mfNodeKind :: TyFixerNodeKind
       }
   | BuiltinTyFixer (CompT AbstractTy) BuiltinFnData
 
-tyFixerFnTy :: TyFixerFnData -> CompT AbstractTy
-tyFixerFnTy = \case
-  TyFixerFnData _ _ ty _ _ _ _ -> ty
-  BuiltinTyFixer ty _ -> ty
+instance
+  (k ~ An_AffineTraversal, a ~ TyName, b ~ TyName) =>
+  LabelOptic "tyName" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData TyName
+      access x = case x of
+        TyFixerFnData y _ _ _ _ _ _ -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> TyName -> TyFixerFnData
+      replace x n = case x of
+        TyFixerFnData _ enc t c ts fn nk -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
+
+instance
+  (k ~ An_AffineTraversal, a ~ DataEncoding, b ~ DataEncoding) =>
+  LabelOptic "encoding" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData DataEncoding
+      access x = case x of
+        TyFixerFnData _ y _ _ _ _ _ -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> DataEncoding -> TyFixerFnData
+      replace x enc = case x of
+        TyFixerFnData n _ t c ts fn nk -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
+
+instance
+  (k ~ A_Lens, a ~ CompT AbstractTy, b ~ CompT AbstractTy) =>
+  LabelOptic "fnTy" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = lens access replace
+    where
+      access :: TyFixerFnData -> CompT AbstractTy
+      access = \case
+        TyFixerFnData _ _ ty _ _ _ _ -> ty
+        BuiltinTyFixer ty _ -> ty
+      replace :: TyFixerFnData -> CompT AbstractTy -> TyFixerFnData
+      replace x t = case x of
+        TyFixerFnData n enc _ c ts fn nk -> TyFixerFnData n enc t c ts fn nk
+        BuiltinTyFixer _ bfd -> BuiltinTyFixer t bfd
+
+instance
+  (k ~ An_AffineTraversal, a ~ Term Name DefaultUni DefaultFun (), b ~ Term Name DefaultUni DefaultFun ()) =>
+  LabelOptic "compiled" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData (Term Name DefaultUni DefaultFun ())
+      access x = case x of
+        TyFixerFnData _ _ _ y _ _ _ -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> Term Name DefaultUni DefaultFun () -> TyFixerFnData
+      replace x c = case x of
+        TyFixerFnData n enc t _ ts fn nk -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
+
+instance
+  (k ~ An_AffineTraversal, a ~ TypeSchema, b ~ TypeSchema) =>
+  LabelOptic "typeSchema" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData TypeSchema
+      access x = case x of
+        TyFixerFnData _ _ _ _ y _ _ -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> TypeSchema -> TyFixerFnData
+      replace x ts = case x of
+        TyFixerFnData n enc t c _ fn nk -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
+
+instance
+  (k ~ An_AffineTraversal, a ~ Text, b ~ Text) =>
+  LabelOptic "funName" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData Text
+      access x = case x of
+        TyFixerFnData _ _ _ _ _ y _ -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> Text -> TyFixerFnData
+      replace x fn = case x of
+        TyFixerFnData n enc t c ts _ nk -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
+
+instance
+  (k ~ An_AffineTraversal, a ~ TyFixerNodeKind, b ~ TyFixerNodeKind) =>
+  LabelOptic "nodeKind" k TyFixerFnData TyFixerFnData a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = atraversal access replace
+    where
+      access :: TyFixerFnData -> Either TyFixerFnData TyFixerNodeKind
+      access x = case x of
+        TyFixerFnData _ _ _ _ _ _ y -> Right y
+        _ -> Left x
+      replace :: TyFixerFnData -> TyFixerNodeKind -> TyFixerFnData
+      replace x nk = case x of
+        TyFixerFnData n enc t c ts fn _ -> TyFixerFnData n enc t c ts fn nk
+        _ -> x
 
 -- BuiltinFnData holds the information we need to compile every "compiler primitive" non-atomic datatype.
 -- This is needed in large part because we cannot generate a corresponding Plutus Term for parametric
@@ -156,10 +270,46 @@ data TyFixerNodeKind = MatchNode | IntroNode | CataNode
 -}
 data TyFixerDataBundle
   = TyFixerDataBundle
-  { introData :: Vector TyFixerFnData
-  , matchData :: Maybe TyFixerFnData
-  , cataData :: Maybe TyFixerFnData
+  { _introData :: Vector TyFixerFnData
+  , _matchData :: Maybe TyFixerFnData
+  , _cataData :: Maybe TyFixerFnData
   }
+
+instance
+  (k ~ A_Lens, a ~ Vector TyFixerFnData, b ~ Vector TyFixerFnData) =>
+  LabelOptic "introData" k TyFixerDataBundle TyFixerDataBundle a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = lens access replace
+    where
+      access :: TyFixerDataBundle -> Vector TyFixerFnData
+      access (TyFixerDataBundle x _ _) = x
+      replace :: TyFixerDataBundle -> Vector TyFixerFnData -> TyFixerDataBundle
+      replace (TyFixerDataBundle _ md cd) ind = TyFixerDataBundle ind md cd
+
+instance
+  (k ~ A_Lens, a ~ Maybe TyFixerFnData, b ~ Maybe TyFixerFnData) =>
+  LabelOptic "matchData" k TyFixerDataBundle TyFixerDataBundle a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = lens access replace
+    where
+      access :: TyFixerDataBundle -> Maybe TyFixerFnData
+      access (TyFixerDataBundle _ x _) = x
+      replace :: TyFixerDataBundle -> Maybe TyFixerFnData -> TyFixerDataBundle
+      replace (TyFixerDataBundle ind _ cd) md = TyFixerDataBundle ind md cd
+
+instance
+  (k ~ A_Lens, a ~ Maybe TyFixerFnData, b ~ Maybe TyFixerFnData) =>
+  LabelOptic "cataData" k TyFixerDataBundle TyFixerDataBundle a b
+  where
+  {-# INLINEABLE labelOptic #-}
+  labelOptic = lens access replace
+    where
+      access :: TyFixerDataBundle -> Maybe TyFixerFnData
+      access (TyFixerDataBundle _ _ x) = x
+      replace :: TyFixerDataBundle -> Maybe TyFixerFnData -> TyFixerDataBundle
+      replace (TyFixerDataBundle ind md _) = TyFixerDataBundle ind md
 
 freshName :: (MonadASG m) => m Name
 freshName = do
@@ -196,7 +346,6 @@ countToTyVars cnt
   where
     cntI :: Int
     cntI = review intCount cnt
-
     mkTV :: Int -> ValT AbstractTy
     mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
 

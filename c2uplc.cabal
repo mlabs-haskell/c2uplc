@@ -50,6 +50,7 @@ common lang
     KindSignatures
     LambdaCase
     MultiParamTypeClasses
+    NoFieldSelectors
     NoStarIsType
     NumericUnderscores
     OverloadedLabels

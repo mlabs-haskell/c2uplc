@@ -75,7 +75,6 @@ import Covenant.Transform.Common
       ),
     TyFixerFnData (BuiltinTyFixer, TyFixerFnData),
     pFreshLam2,
-    tyFixerFnTy,
   )
 import Covenant.Transform.Pipeline.Common (CodeGenData)
 import Covenant.Transform.Pipeline.Monad
@@ -107,7 +106,7 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import GHC.TypeLits (Symbol)
-import Optics.Core (review)
+import Optics.Core (review, view)
 import PlutusCore (Name (Name))
 import PlutusCore.MkPlc (mkConstant)
 import UntypedPlutusCore (DefaultFun, DefaultUni, Term, Unique (Unique))
@@ -127,7 +126,7 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Term, Unique (Unique))
 -}
 newtype CodeGenContext
   = CodeGenContext
-  { getContext ::
+  { _getContext ::
       Rec
         ( "termScope" .== Map Id (Term Name DefaultUni DefaultFun ())
             .+ "argScope" .== Map LambdaId (Vector Name)
@@ -139,6 +138,20 @@ newtype CodeGenContext
             .+ "repPolyHandlers" .== RepPolyHandlers
         )
   }
+
+getContext ::
+  CodeGenContext ->
+  Rec
+    ( "termScope" .== Map Id (Term Name DefaultUni DefaultFun ())
+        .+ "argScope" .== Map LambdaId (Vector Name)
+        .+ "lamScope" .== Vector LambdaId
+        -- We ONLY need an appscope for resolving Nil -_-
+        .+ "appScope" .== Vector AppId
+        .+ "asg" .== Map Id ASGNode
+        .+ "tyFixers" .== Map Id TyFixerFnData
+        .+ "repPolyHandlers" .== RepPolyHandlers
+    )
+getContext (CodeGenContext x) = x
 
 data CodeGenError
   = NoASG
@@ -395,7 +408,7 @@ nodeOrVar i =
                   "Somehow something tried to resolve Id "
                     <> show i
                     <> " which belongs to a type fixer of type: "
-                    <> pCompT (tyFixerFnTy tyFixer)
+                    <> pCompT (view #fnTy tyFixer)
 
 compileTopDown :: Id -> CodeGenM (Term Name DefaultUni DefaultFun ())
 compileTopDown nodeId =

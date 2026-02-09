@@ -290,6 +290,7 @@ caseConstrEnum ::
   Term Name DefaultUni DefaultFun ()
 caseConstrEnum scrut = pCase ctorIx
   where
+    ctorIx :: Term Name DefaultUni DefaultFun ()
     ctorIx = pFst (unConstrData scrut)
 
 -- convenience for pApp FstPair
@@ -506,6 +507,7 @@ pMkBuiltin = \case
 mkBuiltinCase :: forall a. (Show a) => Int -> String -> [a] -> String
 mkBuiltinCase indent var ctors = "case " <> var <> " of" <> cases
   where
+    cases :: String
     cases = foldl' go "" ctors
     go :: String -> a -> String
     go acc (show -> ctor) = acc <> "\n" <> replicate indent ' ' <> ctor <> " -> " <> "Builtin () PB." <> ctor

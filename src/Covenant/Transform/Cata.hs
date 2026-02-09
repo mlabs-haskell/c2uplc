@@ -11,7 +11,14 @@ import Control.Monad.RWS.Strict (MonadReader, MonadState)
 import Covenant.CodeGen.Stubs (MonadStub, resolveStub)
 import Covenant.Data (DatatypeInfo (DatatypeInfo), mkCataFunTy)
 import Covenant.DeBruijn (DeBruijn (S, Z))
-import Covenant.Index (Count, intCount, intIndex, ix0, ix1)
+import Covenant.Index
+  ( Count,
+    Index,
+    intCount,
+    intIndex,
+    ix0,
+    ix1,
+  )
 import Covenant.Plutus
   ( pApp,
     pCase,
@@ -24,14 +31,7 @@ import Covenant.Transform.Common
   ( BuiltinFnData (List_Cata),
     TyFixerFnData
       ( BuiltinTyFixer,
-        TyFixerFnData,
-        mfCompiled,
-        mfEncoding,
-        mfFunName,
-        mfNodeKind,
-        mfPolyType,
-        mfTyName,
-        mfTypeSchema
+        TyFixerFnData
       ),
     TyFixerNodeKind (CataNode),
     countToTyVars,
@@ -73,6 +73,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
+import GHC.TypeLits (Symbol)
 import Optics.Core (preview, review, view)
 import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
@@ -119,17 +120,8 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 let enc = view #datatypeEncoding nonOpaqueDecl
                 let schema = mkTypeSchema False enc cataFunTy
                     cataFunName = "cata_" <> tyNameInner
-                compiled <- genCataPLC cataFunTy cataFunName enc schema
-                let here =
-                      TyFixerFnData
-                        { mfTyName = tn
-                        , mfEncoding = enc
-                        , mfPolyType = cataFunTy
-                        , mfCompiled = compiled
-                        , mfTypeSchema = schema
-                        , mfFunName = cataFunName
-                        , mfNodeKind = CataNode
-                        }
+                compiled <- pFix =<< genCataPLC cataFunTy cataFunName enc schema
+                let here = TyFixerFnData tn enc cataFunTy compiled schema cataFunName CataNode
                 pure . Just $ here
     genCataPLC ::
       CompT AbstractTy ->
@@ -341,9 +333,10 @@ mkWrappedHandlerSOP self cataFnCount armHandlerTy armHandlerTerm = case armHandl
   where
     -- Something important to keep in mind: There is ALWAYS at least one type variable in the cata fn type
     -- (the "return type var"). So we know that iCount MUST always be > 0.
+    iCount :: Int
     iCount = review intCount cataFnCount
+    rIndex :: forall (ofWhat :: Symbol). Index ofWhat
     rIndex = fromJust $ preview intIndex (iCount - 1)
-
     isR :: ValT AbstractTy -> Bool
     isR (Abstraction (BoundAt _ i)) = i == rIndex
     isR _ = False
@@ -359,15 +352,12 @@ isRecursiveDatatype (DataDeclaration tn cnt ctors _enc) = any check ctors
   where
     tyVarArgs :: Vector (ValT AbstractTy)
     tyVarArgs = countToTyVars cnt
-
     check :: Constructor AbstractTy -> Bool
     check (Constructor _ args) = any (isRec tyVarArgs) args
-
     bump :: ValT AbstractTy -> ValT AbstractTy
     bump = \case
       Abstraction (BoundAt db i) -> Abstraction (BoundAt (S db) i)
       other -> other
-
     isRec :: Vector (ValT AbstractTy) -> ValT AbstractTy -> Bool
     isRec tyVars = \case
       -- We don't allow polymorphic fn arguments to constructors.
