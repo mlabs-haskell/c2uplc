@@ -2,49 +2,49 @@
 
 {- HLINT ignore "Use <$>" -}
 -- Seriously WTF this makes things so much uglier!
-module Covenant.ArgDict (
-  pCompT,
-  pValT,
-  pVec,
-  pName,
-  crudePrettyASG',
-  crudePrettyASG,
-  ppASG,
-)
+module Covenant.ArgDict
+  ( pCompT,
+    pValT,
+    pVec,
+    pName,
+    crudePrettyASG',
+    crudePrettyASG,
+    ppASG,
+  )
 where
 
 import Control.Monad.RWS.Strict (MonadTrans (lift), ask, local)
 import Control.Monad.Trans.Reader (ReaderT (runReaderT))
-import Covenant.ASG (
-  ASGNode (ACompNode, AValNode, AnError),
-  BoundTyVar,
-  CompNodeInfo (Builtin1, Builtin2, Builtin3, Builtin6, Force, Lam),
-  Id,
-  Ref (AnArg, AnId),
-  ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
- )
-import Covenant.Constant (
-  AConstant (
-    ABoolean,
-    AByteString,
-    AString,
-    AUnit,
-    AnInteger
-  ),
- )
+import Covenant.ASG
+  ( ASGNode (ACompNode, AValNode, AnError),
+    BoundTyVar,
+    CompNodeInfo (Builtin1, Builtin2, Builtin3, Builtin6, Force, Lam),
+    Id,
+    Ref (AnArg, AnId),
+    ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
+  )
+import Covenant.Constant
+  ( AConstant
+      ( ABoolean,
+        AByteString,
+        AString,
+        AUnit,
+        AnInteger
+      ),
+  )
 import Covenant.DeBruijn (asInt)
 import Covenant.ExtendedASG ()
 import Covenant.Index (intIndex)
 import Covenant.Test (Arg (UnsafeMkArg), BoundTyVar (BoundTyVar), Id (UnsafeMkId))
 import Covenant.Transform.TyUtils (countToTyVars)
-import Covenant.Type (
-  AbstractTy (BoundAt),
-  CompT (CompN),
-  CompTBody (ArgsAndResult),
-  ConstructorName (ConstructorName),
-  TyName (TyName),
-  ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
- )
+import Covenant.Type
+  ( AbstractTy (BoundAt),
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
+    ConstructorName (ConstructorName),
+    TyName (TyName),
+    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
+  )
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Text qualified as T
@@ -54,28 +54,28 @@ import Data.Void (Void, vacuous)
 import Data.Wedge (Wedge (Here, Nowhere, There))
 import Optics.Core (review)
 import PlutusCore.Name.Unique (Name (Name))
-import Prettyprinter (
-  Doc,
-  align,
-  angles,
-  braces,
-  brackets,
-  encloseSep,
-  group,
-  hardline,
-  hsep,
-  indent,
-  line,
-  list,
-  nest,
-  parens,
-  pretty,
-  punctuate,
-  tupled,
-  vcat,
-  viaShow,
-  (<+>),
- )
+import Prettyprinter
+  ( Doc,
+    align,
+    angles,
+    braces,
+    brackets,
+    encloseSep,
+    group,
+    hardline,
+    hsep,
+    indent,
+    line,
+    list,
+    nest,
+    parens,
+    pretty,
+    punctuate,
+    tupled,
+    vcat,
+    viaShow,
+    (<+>),
+  )
 
 -- I need some of this to make debugging faster (the time spent writing this will save me
 -- more time debugging than it takes), it should be somewhere else eventually
