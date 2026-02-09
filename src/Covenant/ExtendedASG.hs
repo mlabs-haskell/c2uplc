@@ -1,38 +1,38 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Covenant.ExtendedASG
-  ( ExtendedId (WrappedSrc, IdentityFn, EphemeralError, Projection, Embedding, TyFixerFn),
-    ExtendedKey (eSafeNodeAt),
-    eNodeAt,
-    forgetExtendedId,
-    ExtendedASG,
-    extendedNodes,
-    wrapASG,
-    MonadASG (..),
-    nextId,
-    identityFnId,
-    ephemeralErrorId,
-    projectionId,
-    embeddingId,
-    tyFixerFnId,
-    eInsert,
-    eTopLevelSrcNode,
-    resolveExtended,
-    unExtendedASG,
-    removeEphemeralError,
-    -- test util (mainly for debugging generated PLC w/o having to run the whole compiler)
-    runWithEmptyASG,
-  )
+module Covenant.ExtendedASG (
+  ExtendedId (WrappedSrc, IdentityFn, EphemeralError, Projection, Embedding, TyFixerFn),
+  ExtendedKey (eSafeNodeAt),
+  eNodeAt,
+  forgetExtendedId,
+  ExtendedASG,
+  extendedNodes,
+  wrapASG,
+  MonadASG (..),
+  nextId,
+  identityFnId,
+  ephemeralErrorId,
+  projectionId,
+  embeddingId,
+  tyFixerFnId,
+  eInsert,
+  eTopLevelSrcNode,
+  resolveExtended,
+  unExtendedASG,
+  removeEphemeralError,
+  -- test util (mainly for debugging generated PLC w/o having to run the whole compiler)
+  runWithEmptyASG,
+)
 where
 
 import Control.Monad.Except (ExceptT)
-import Control.Monad.RWS.Strict
-  ( MonadState (get, put),
-    MonadTrans (lift),
-    RWS,
-    RWST,
-  )
+import Control.Monad.RWS.Strict (
+  MonadState (get, put),
+  MonadTrans (lift),
+  RWS,
+  RWST,
+ )
 import Control.Monad.State.Strict (State, evalState)
 import Covenant.ASG (ASGNode, Id)
 import Covenant.Test (Id (UnsafeMkId))
@@ -115,18 +115,18 @@ extendedNodes (ExtendedASG nodes _ _) = nodes
 
 unExtendedASG :: ExtendedASG -> (Id, [(Id, ASGNode)])
 unExtendedASG (ExtendedASG nodes _ _) = (topSrcId, rawASG)
-  where
-    topSrcId = forgetExtendedId . fst $ M.findMax nodes
-    rawASG = first forgetExtendedId <$> M.toList nodes
+ where
+  topSrcId = forgetExtendedId . fst $ M.findMax nodes
+  rawASG = first forgetExtendedId <$> M.toList nodes
 
 wrapASG :: Map Id ASGNode -> ExtendedASG
 wrapASG asg = ExtendedASG nodes idResolver (fst . M.findMax $ asg)
-  where
-    nodes :: Map ExtendedId ASGNode
-    nodes = M.mapKeys WrappedSrcId asg
+ where
+  nodes :: Map ExtendedId ASGNode
+  nodes = M.mapKeys WrappedSrcId asg
 
-    idResolver :: Map Id ExtendedId
-    idResolver = M.fromList . map (\x -> (x, WrappedSrcId x)) . M.keys $ asg
+  idResolver :: Map Id ExtendedId
+  idResolver = M.fromList . map (\x -> (x, WrappedSrcId x)) . M.keys $ asg
 
 -- sry koz ill delete it later
 class ExtendedKey a where

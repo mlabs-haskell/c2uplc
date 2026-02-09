@@ -2,28 +2,28 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE StrictData #-}
 
-module Covenant.Transform.Schema
-  ( TypeSchema (..),
-    mkTypeSchema,
-    schemaFnArgs,
-    schemaFnType,
-  )
+module Covenant.Transform.Schema (
+  TypeSchema (..),
+  mkTypeSchema,
+  schemaFnArgs,
+  schemaFnType,
+)
 where
 
 import Covenant.ArgDict (pCompT)
 import Covenant.DeBruijn (DeBruijn (S, Z))
 import Covenant.Index (Index, intCount, intIndex)
-import Covenant.Type
-  ( AbstractTy (BoundAt),
-    CompT (Comp0, CompN),
-    CompTBody (ArgsAndResult, ReturnT, (:--:>)),
-    DataEncoding (SOP),
-    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
-    tyvar,
-  )
-import Data.Foldable
-  ( foldl',
-  )
+import Covenant.Type (
+  AbstractTy (BoundAt),
+  CompT (Comp0, CompN),
+  CompTBody (ArgsAndResult, ReturnT, (:--:>)),
+  DataEncoding (SOP),
+  ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
+  tyvar,
+ )
+import Data.Foldable (
+  foldl',
+ )
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Set qualified as S
@@ -151,37 +151,37 @@ mkTypeSchema isIntro dataEnc fnTy@(CompN tvCnt (ArgsAndResult args result)) = ca
             fnTyWithHandlers = CompN tvCnt $ ArgsAndResult (args <> extraHandlerArgs) result
             msg' = msg <> "\n  result: " <> pCompT fnTyWithHandlers
          in trace msg' $ DataSchema fnTyWithHandlers handlerDict
-  where
-    msg =
-      "\nmkTypeSchema\n  fnTy: "
-        <> pCompT fnTy
-        <> "\n  allUsedTyVarIndices: "
-        <> show allUsedTyVarIndices
-    lenOrigArgs = Vector.length args
-    allUsedTyVarIndices :: [Index "tyvar"]
-    allUsedTyVarIndices =
-      S.toList
-        . S.fromList
-        . (if isIntro then id else cleanup)
-        . concatMap collectIndices
-        . Vector.toList
-        $ args
-    -- We don't ever care about the 'r' variable - we never need to project or embed it
-    -- so we can just remove it from our list. Have to be careful to only ever use this
-    -- on Match/Cata since Intro doesn't have an "output tyvar"
-    cleanup :: [Index "tyvar"] -> [Index "tyvar"]
-    cleanup = filter (not . isR)
-      where
-        isR :: Index "tyvar" -> Bool
-        isR indx = review intIndex indx == rIndx
-        rIndx = review intCount tvCnt - 1
+ where
+  msg =
+    "\nmkTypeSchema\n  fnTy: "
+      <> pCompT fnTy
+      <> "\n  allUsedTyVarIndices: "
+      <> show allUsedTyVarIndices
+  lenOrigArgs = Vector.length args
+  allUsedTyVarIndices :: [Index "tyvar"]
+  allUsedTyVarIndices =
+    S.toList
+      . S.fromList
+      . (if isIntro then id else cleanup)
+      . concatMap collectIndices
+      . Vector.toList
+      $ args
+  -- We don't ever care about the 'r' variable - we never need to project or embed it
+  -- so we can just remove it from our list. Have to be careful to only ever use this
+  -- on Match/Cata since Intro doesn't have an "output tyvar"
+  cleanup :: [Index "tyvar"] -> [Index "tyvar"]
+  cleanup = filter (not . isR)
+   where
+    isR :: Index "tyvar" -> Bool
+    isR indx = review intIndex indx == rIndx
+    rIndx = review intCount tvCnt - 1
 
-    collectIndices :: ValT AbstractTy -> [Index "tyvar"]
-    collectIndices = \case
-      Abstraction (BoundAt _ indx) -> [indx]
-      ThunkT (CompN _ (ArgsAndResult args' _)) -> concatMap collectIndices $ Vector.toList args'
-      BuiltinFlat _ -> []
-      Datatype _ args' -> concatMap collectIndices $ Vector.toList args'
+  collectIndices :: ValT AbstractTy -> [Index "tyvar"]
+  collectIndices = \case
+    Abstraction (BoundAt _ indx) -> [indx]
+    ThunkT (CompN _ (ArgsAndResult args' _)) -> concatMap collectIndices $ Vector.toList args'
+    BuiltinFlat _ -> []
+    Datatype _ args' -> concatMap collectIndices $ Vector.toList args'
 
 {-
 -- TODO/REVIEW: Maybe this needs to run in a reader to track DB levels?

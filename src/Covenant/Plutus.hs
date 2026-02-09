@@ -4,67 +4,67 @@
 
 {- HLINT ignore "Use camelCase" -}
 
-module Covenant.Plutus
-  ( pVar,
-    pLam,
-    pApp,
-    pForce,
-    pDelay,
-    pError,
-    pLet,
-    pConstant,
-    pConstr,
-    plutus_I,
-    plutus_ConstrData,
-    iData,
-    bData,
-    constrData,
-    listData,
-    mapData,
-    SomeBuiltin (..),
-    IsBuiltin (..),
-    pBuiltin,
-    pCase,
-    unIData,
-    unListData,
-    pHead,
-    pTail,
-    unConstrData,
-    caseConstrEnum,
-    pFst,
-    pSnd,
-    (#),
-    (#<=),
-    (#-),
-    (#+),
-    (#==),
-    (#<),
-    (#!),
-    pIf,
-    pCons,
-    pNilData,
-    -- temporary
-    mkBuiltinCase,
-    oneArgFuncs,
-    twoArgFuncs,
-    threeArgFuncs,
-    sixArgFuncs,
-    -- for debugging
-    betterPrettyPlutus,
-    prettyPTerm,
-    ppTerm,
-  )
+module Covenant.Plutus (
+  pVar,
+  pLam,
+  pApp,
+  pForce,
+  pDelay,
+  pError,
+  pLet,
+  pConstant,
+  pConstr,
+  plutus_I,
+  plutus_ConstrData,
+  iData,
+  bData,
+  constrData,
+  listData,
+  mapData,
+  SomeBuiltin (..),
+  IsBuiltin (..),
+  pBuiltin,
+  pCase,
+  unIData,
+  unListData,
+  pHead,
+  pTail,
+  unConstrData,
+  caseConstrEnum,
+  pFst,
+  pSnd,
+  (#),
+  (#<=),
+  (#-),
+  (#+),
+  (#==),
+  (#<),
+  (#!),
+  pIf,
+  pCons,
+  pNilData,
+  -- temporary
+  mkBuiltinCase,
+  oneArgFuncs,
+  twoArgFuncs,
+  threeArgFuncs,
+  sixArgFuncs,
+  -- for debugging
+  betterPrettyPlutus,
+  prettyPTerm,
+  ppTerm,
+)
 where
 
-import Covenant.Constant
-  ( AConstant
-      ( ABoolean,
-        AByteString,
-        AString,
-        AUnit,
-        AnInteger
-      ),
-  )
+import Covenant.Constant (
+  AConstant (
+    ABoolean,
+    AByteString,
+    AString,
+    AUnit,
+    AnInteger
+  ),
+ )
 import Covenant.Prim (OneArgFunc, SixArgFunc, ThreeArgFunc, TwoArgFunc)
 import Covenant.Prim qualified as Prim
 import Data.Foldable (foldl')
@@ -76,43 +76,43 @@ import PlutusCore (Name, someValue)
 import PlutusCore.Data (Data)
 import PlutusCore.Default.Builtins qualified as PB
 import PlutusCore.MkPlc (mkConstant)
-import Prettyprinter
-  ( Doc,
-    align,
-    angles,
-    braces,
-    encloseSep,
-    group,
-    hardline,
-    hsep,
-    line,
-    list,
-    nest,
-    parens,
-    pretty,
-    punctuate,
-    space,
-    vcat,
-    vsep,
-    (<+>),
-  )
-import UntypedPlutusCore
-  ( DefaultFun,
-    DefaultUni,
-    Name (Name),
-    Term
-      ( Apply,
-        Builtin,
-        Case,
-        Constant,
-        Constr,
-        Delay,
-        Error,
-        Force,
-        LamAbs,
-        Var
-      ),
-  )
+import Prettyprinter (
+  Doc,
+  align,
+  angles,
+  braces,
+  encloseSep,
+  group,
+  hardline,
+  hsep,
+  line,
+  list,
+  nest,
+  parens,
+  pretty,
+  punctuate,
+  space,
+  vcat,
+  vsep,
+  (<+>),
+ )
+import UntypedPlutusCore (
+  DefaultFun,
+  DefaultUni,
+  Name (Name),
+  Term (
+    Apply,
+    Builtin,
+    Case,
+    Constant,
+    Constr,
+    Delay,
+    Error,
+    Force,
+    LamAbs,
+    Var
+  ),
+ )
 
 -- mock Plutus types and placeholder helpers
 -- type Term Name DefaultUni DefaultFun () = Term Name DefaultUni DefaultFun ()
@@ -165,13 +165,13 @@ pCase = Case ()
 
 betterPrettyPlutus :: forall ann. Term Name DefaultUni DefaultFun () -> Doc ann
 betterPrettyPlutus pt = vcat . reverse $ go [] pt
-  where
-    go :: [Doc ann] -> Term Name DefaultUni DefaultFun () -> [Doc ann]
-    go acc = \case
-      Apply () (LamAbs () (Name txt _) body) arg ->
-        let here = "let" <+> pretty txt <+> "=" <+> pretty arg <+> space
-         in go (here : acc) body
-      other -> pretty other : acc
+ where
+  go :: [Doc ann] -> Term Name DefaultUni DefaultFun () -> [Doc ann]
+  go acc = \case
+    Apply () (LamAbs () (Name txt _) body) arg ->
+      let here = "let" <+> pretty txt <+> "=" <+> pretty arg <+> space
+       in go (here : acc) body
+    other -> pretty other : acc
 
 ppTerm :: Term Name DefaultUni DefaultFun () -> String
 ppTerm = show . prettyPTerm
@@ -182,55 +182,55 @@ prettyPTerm pt = case takeBindable ([], pt) of
   (letBinds, rest) ->
     let pRest = "in" <+> prettyNoBind rest
      in align . vsep . reverse $ (pRest : letBinds)
-  where
-    takeBindable :: ([Doc ann], Term Name DefaultUni DefaultFun ()) -> ([Doc ann], Term Name DefaultUni DefaultFun ())
-    takeBindable (acc, t) = case t of
-      Apply () (LamAbs () (Name txt _) body) arg ->
-        let here = "let" <+> pretty txt <+> "=" <+> prettyPTerm arg
-         in takeBindable (here : acc, body)
-      other -> (acc, other)
-    takeLamArgs :: ([Text], Term Name DefaultUni DefaultFun ()) -> ([Text], Term Name DefaultUni DefaultFun ())
-    takeLamArgs (varAcc, next) = case next of
-      LamAbs () (Name txt _) body -> takeLamArgs (txt : varAcc, body)
-      _ -> (reverse varAcc, next)
-    prettyNoBind :: Term Name DefaultUni DefaultFun () -> Doc ann
-    prettyNoBind = \case
-      Var () (Name txt _) -> pretty txt
-      LamAbs () (Name txt _) _body ->
-        let (vars, body) = takeLamArgs ([txt], _body)
-         in align . group $
-              "\\" <> hsep (pretty <$> vars) <+> "->" <> line <> nest 2 (prettyPTerm body)
-      Apply () f arg ->
-        let fs = prettyAtomic <$> analyzeApp f
-         in align . group . encloseSep "" "" " # " $ (fs <> [prettyAtomic arg])
-      Force () inner -> "!" <> prettyAtomic inner
-      Delay () inner -> angles $ prettyNoBind inner
-      c@(Constant _ _) -> pretty c
-      Builtin _ b -> pretty b
-      Error {} -> "ERROR"
-      Constr () cix args -> "constr" <+> pretty cix <+> align (group $ list (prettyPTerm <$> args))
-      Case () scrut handlers ->
-        group $
-          "case"
-            <+> prettyNoBind scrut
-            <+> hardline
-            <> align
-              ( group
-                  (nest 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
-              )
-    prettyAtomic :: Term Name DefaultUni DefaultFun () -> Doc ann
-    prettyAtomic = \case
-      v@Var {} -> prettyNoBind v
-      c@Constant {} -> prettyNoBind c
-      e@Error {} -> prettyNoBind e
-      d@Delay {} -> prettyNoBind d
-      f@Force {} -> prettyNoBind f
-      b@Builtin {} -> prettyNoBind b
-      other -> align . group . parens . prettyNoBind $ other
-    analyzeApp :: Term Name DefaultUni DefaultFun () -> [Term Name DefaultUni DefaultFun ()]
-    analyzeApp = \case
-      Apply () f arg -> analyzeApp f <> [arg]
-      other -> [other]
+ where
+  takeBindable :: ([Doc ann], Term Name DefaultUni DefaultFun ()) -> ([Doc ann], Term Name DefaultUni DefaultFun ())
+  takeBindable (acc, t) = case t of
+    Apply () (LamAbs () (Name txt _) body) arg ->
+      let here = "let" <+> pretty txt <+> "=" <+> prettyPTerm arg
+       in takeBindable (here : acc, body)
+    other -> (acc, other)
+  takeLamArgs :: ([Text], Term Name DefaultUni DefaultFun ()) -> ([Text], Term Name DefaultUni DefaultFun ())
+  takeLamArgs (varAcc, next) = case next of
+    LamAbs () (Name txt _) body -> takeLamArgs (txt : varAcc, body)
+    _ -> (reverse varAcc, next)
+  prettyNoBind :: Term Name DefaultUni DefaultFun () -> Doc ann
+  prettyNoBind = \case
+    Var () (Name txt _) -> pretty txt
+    LamAbs () (Name txt _) _body ->
+      let (vars, body) = takeLamArgs ([txt], _body)
+       in align . group $
+            "\\" <> hsep (pretty <$> vars) <+> "->" <> line <> nest 2 (prettyPTerm body)
+    Apply () f arg ->
+      let fs = prettyAtomic <$> analyzeApp f
+       in align . group . encloseSep "" "" " # " $ (fs <> [prettyAtomic arg])
+    Force () inner -> "!" <> prettyAtomic inner
+    Delay () inner -> angles $ prettyNoBind inner
+    c@(Constant _ _) -> pretty c
+    Builtin _ b -> pretty b
+    Error{} -> "ERROR"
+    Constr () cix args -> "constr" <+> pretty cix <+> align (group $ list (prettyPTerm <$> args))
+    Case () scrut handlers ->
+      group $
+        "case"
+          <+> prettyNoBind scrut
+          <+> hardline
+          <> align
+            ( group
+                (nest 2 . braces . vcat . punctuate ";" . fmap prettyPTerm . Vector.toList $ handlers)
+            )
+  prettyAtomic :: Term Name DefaultUni DefaultFun () -> Doc ann
+  prettyAtomic = \case
+    v@Var{} -> prettyNoBind v
+    c@Constant{} -> prettyNoBind c
+    e@Error{} -> prettyNoBind e
+    d@Delay{} -> prettyNoBind d
+    f@Force{} -> prettyNoBind f
+    b@Builtin{} -> prettyNoBind b
+    other -> align . group . parens . prettyNoBind $ other
+  analyzeApp :: Term Name DefaultUni DefaultFun () -> [Term Name DefaultUni DefaultFun ()]
+  analyzeApp = \case
+    Apply () f arg -> analyzeApp f <> [arg]
+    other -> [other]
 
 pConstant :: AConstant -> Term Name DefaultUni DefaultFun ()
 pConstant = \case
@@ -273,8 +273,9 @@ bData t = pBuiltin Prim.BData # t
 
 -- 'Constr' (The data one)
 
--- | This exepects a non-data-encoded Integer term for the first arg.
--- TODO Check that that's what we give it anywhere it might be used
+{- | This exepects a non-data-encoded Integer term for the first arg.
+TODO Check that that's what we give it anywhere it might be used
+-}
 constrData :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
 constrData cix ctorArgs = pBuiltin Prim.ConstrData # cix # ctorArgs
 
@@ -288,8 +289,8 @@ caseConstrEnum ::
   Vector (Term Name DefaultUni DefaultFun ()) ->
   Term Name DefaultUni DefaultFun ()
 caseConstrEnum scrut = pCase ctorIx
-  where
-    ctorIx = pFst (unConstrData scrut)
+ where
+  ctorIx = pFst (unConstrData scrut)
 
 -- convenience for pApp FstPair
 pFst :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
@@ -504,105 +505,105 @@ pMkBuiltin = \case
 
 mkBuiltinCase :: forall a. (Show a) => Int -> String -> [a] -> String
 mkBuiltinCase indent var ctors = "case " <> var <> " of" <> cases
-  where
-    cases = foldl' go "" ctors
-    go :: String -> a -> String
-    go acc (show -> ctor) = acc <> "\n" <> replicate indent ' ' <> ctor <> " -> " <> "Builtin () PB." <> ctor
+ where
+  cases = foldl' go "" ctors
+  go :: String -> a -> String
+  go acc (show -> ctor) = acc <> "\n" <> replicate indent ' ' <> ctor <> " -> " <> "Builtin () PB." <> ctor
 
 oneArgFuncs :: [OneArgFunc]
 oneArgFuncs =
-  [ Prim.LengthOfByteString,
-    Prim.Sha2_256,
-    Prim.Sha3_256,
-    Prim.Blake2b_256,
-    Prim.EncodeUtf8,
-    Prim.DecodeUtf8,
-    Prim.FstPair,
-    Prim.SndPair,
-    Prim.HeadList,
-    Prim.TailList,
-    Prim.NullList,
-    Prim.MapData,
-    Prim.ListData,
-    Prim.IData,
-    Prim.BData,
-    Prim.UnConstrData,
-    Prim.UnMapData,
-    Prim.UnListData,
-    Prim.UnIData,
-    Prim.UnBData,
-    Prim.SerialiseData,
-    Prim.BLS12_381_G1_neg,
-    Prim.BLS12_381_G1_compress,
-    Prim.BLS12_381_G1_uncompress,
-    Prim.BLS12_381_G2_neg,
-    Prim.BLS12_381_G2_compress,
-    Prim.BLS12_381_G2_uncompress,
-    Prim.Keccak_256,
-    Prim.Blake2b_224,
-    Prim.ComplementByteString,
-    Prim.CountSetBits,
-    Prim.FindFirstSetBit,
-    Prim.Ripemd_160
+  [ Prim.LengthOfByteString
+  , Prim.Sha2_256
+  , Prim.Sha3_256
+  , Prim.Blake2b_256
+  , Prim.EncodeUtf8
+  , Prim.DecodeUtf8
+  , Prim.FstPair
+  , Prim.SndPair
+  , Prim.HeadList
+  , Prim.TailList
+  , Prim.NullList
+  , Prim.MapData
+  , Prim.ListData
+  , Prim.IData
+  , Prim.BData
+  , Prim.UnConstrData
+  , Prim.UnMapData
+  , Prim.UnListData
+  , Prim.UnIData
+  , Prim.UnBData
+  , Prim.SerialiseData
+  , Prim.BLS12_381_G1_neg
+  , Prim.BLS12_381_G1_compress
+  , Prim.BLS12_381_G1_uncompress
+  , Prim.BLS12_381_G2_neg
+  , Prim.BLS12_381_G2_compress
+  , Prim.BLS12_381_G2_uncompress
+  , Prim.Keccak_256
+  , Prim.Blake2b_224
+  , Prim.ComplementByteString
+  , Prim.CountSetBits
+  , Prim.FindFirstSetBit
+  , Prim.Ripemd_160
   ]
 
 twoArgFuncs :: [TwoArgFunc]
 twoArgFuncs =
-  [ Prim.AddInteger,
-    Prim.SubtractInteger,
-    Prim.MultiplyInteger,
-    Prim.DivideInteger,
-    Prim.QuotientInteger,
-    Prim.RemainderInteger,
-    Prim.ModInteger,
-    Prim.EqualsInteger,
-    Prim.LessThanInteger,
-    Prim.LessThanEqualsInteger,
-    Prim.AppendByteString,
-    Prim.ConsByteString,
-    Prim.IndexByteString,
-    Prim.EqualsByteString,
-    Prim.LessThanByteString,
-    Prim.LessThanEqualsByteString,
-    Prim.AppendString,
-    Prim.EqualsString,
-    Prim.ChooseUnit,
-    Prim.Trace,
-    Prim.MkCons,
-    Prim.ConstrData,
-    Prim.EqualsData,
-    Prim.MkPairData,
-    Prim.BLS12_381_G1_add,
-    Prim.BLS12_381_G1_scalarMul,
-    Prim.BLS12_381_G1_equal,
-    Prim.BLS12_381_G1_hashToGroup,
-    Prim.BLS12_381_G2_add,
-    Prim.BLS12_381_G2_scalarMul,
-    Prim.BLS12_381_G2_equal,
-    Prim.BLS12_381_G2_hashToGroup,
-    Prim.BLS12_381_millerLoop,
-    Prim.BLS12_381_mulMlResult,
-    Prim.BLS12_381_finalVerify,
-    Prim.ByteStringToInteger,
-    Prim.ReadBit,
-    Prim.ReplicateByte,
-    Prim.ShiftByteString,
-    Prim.RotateByteString
+  [ Prim.AddInteger
+  , Prim.SubtractInteger
+  , Prim.MultiplyInteger
+  , Prim.DivideInteger
+  , Prim.QuotientInteger
+  , Prim.RemainderInteger
+  , Prim.ModInteger
+  , Prim.EqualsInteger
+  , Prim.LessThanInteger
+  , Prim.LessThanEqualsInteger
+  , Prim.AppendByteString
+  , Prim.ConsByteString
+  , Prim.IndexByteString
+  , Prim.EqualsByteString
+  , Prim.LessThanByteString
+  , Prim.LessThanEqualsByteString
+  , Prim.AppendString
+  , Prim.EqualsString
+  , Prim.ChooseUnit
+  , Prim.Trace
+  , Prim.MkCons
+  , Prim.ConstrData
+  , Prim.EqualsData
+  , Prim.MkPairData
+  , Prim.BLS12_381_G1_add
+  , Prim.BLS12_381_G1_scalarMul
+  , Prim.BLS12_381_G1_equal
+  , Prim.BLS12_381_G1_hashToGroup
+  , Prim.BLS12_381_G2_add
+  , Prim.BLS12_381_G2_scalarMul
+  , Prim.BLS12_381_G2_equal
+  , Prim.BLS12_381_G2_hashToGroup
+  , Prim.BLS12_381_millerLoop
+  , Prim.BLS12_381_mulMlResult
+  , Prim.BLS12_381_finalVerify
+  , Prim.ByteStringToInteger
+  , Prim.ReadBit
+  , Prim.ReplicateByte
+  , Prim.ShiftByteString
+  , Prim.RotateByteString
   ]
 
 threeArgFuncs :: [ThreeArgFunc]
 threeArgFuncs =
-  [ Prim.VerifyEd25519Signature,
-    Prim.VerifyEcdsaSecp256k1Signature,
-    Prim.VerifySchnorrSecp256k1Signature,
-    Prim.IfThenElse,
-    Prim.ChooseList,
-    Prim.IntegerToByteString,
-    Prim.AndByteString,
-    Prim.OrByteString,
-    Prim.XorByteString,
-    Prim.WriteBits,
-    Prim.ExpModInteger
+  [ Prim.VerifyEd25519Signature
+  , Prim.VerifyEcdsaSecp256k1Signature
+  , Prim.VerifySchnorrSecp256k1Signature
+  , Prim.IfThenElse
+  , Prim.ChooseList
+  , Prim.IntegerToByteString
+  , Prim.AndByteString
+  , Prim.OrByteString
+  , Prim.XorByteString
+  , Prim.WriteBits
+  , Prim.ExpModInteger
   ]
 
 sixArgFuncs :: [SixArgFunc]

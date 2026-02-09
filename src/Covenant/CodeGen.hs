@@ -1,17 +1,17 @@
-module Covenant.CodeGen
-  ( compile,
-    evalTerm,
-    compilePretty,
-    CodeGenError,
-  )
+module Covenant.CodeGen (
+  compile,
+  evalTerm,
+  compilePretty,
+  CodeGenError,
+)
 where
 
 -- N.B. *WE* have two different things called `ConstrData`
 
-import Covenant.CodeGen.Common
-  ( CodeGenError (WrapStubError),
-    runTopDownCompile,
-  )
+import Covenant.CodeGen.Common (
+  CodeGenError (WrapStubError),
+  runTopDownCompile,
+ )
 import Covenant.ExtendedASG (wrapASG)
 import Covenant.JSON (CompilationUnit (CompilationUnit))
 import Covenant.Test (unsafeMkDatatypeInfos)
@@ -43,9 +43,9 @@ compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runC
   runTopDownCompile cgData >>= \case
     Left cgErr -> error $ "Compilation error during code generation: " <> show cgErr
     Right aTerm -> pure aTerm
-  where
-    datatypes :: Datatypes
-    datatypes = Datatypes $ unsafeMkDatatypeInfos (Vector.toList datatypesRaw)
+ where
+  datatypes :: Datatypes
+  datatypes = Datatypes $ unsafeMkDatatypeInfos (Vector.toList datatypesRaw)
 
 -----------------------------------
 
@@ -58,16 +58,16 @@ evalTerm ::
 evalTerm t = case errOrRes of
   Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log'
   Right res -> pure res
-  where
-    (errOrRes, log') = evalTerm' t
+ where
+  (errOrRes, log') = evalTerm' t
 
 -- no budget, don't care yet
 evalTerm' ::
   Term Name DefaultUni DefaultFun () ->
   ( Either
       (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
-      (Term Name DefaultUni DefaultFun ()),
-    [Text]
+      (Term Name DefaultUni DefaultFun ())
+  , [Text]
   )
 evalTerm' t =
   case Cek.runCek defaultCekParametersForTesting Cek.counting Cek.logEmitter t of

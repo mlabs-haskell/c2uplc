@@ -1,50 +1,50 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE StrictData #-}
 
-module Covenant.Transform.Pipeline.Common
-  ( CodeGenData,
-    UniqueError (..),
-    TransformState,
-    ConcretifyCxt,
-    resolvePolyRepHandler,
-    lookupDatatypeInfo,
-    syntheticLamNode,
-    mapField,
-  )
+module Covenant.Transform.Pipeline.Common (
+  CodeGenData,
+  UniqueError (..),
+  TransformState,
+  ConcretifyCxt,
+  resolvePolyRepHandler,
+  lookupDatatypeInfo,
+  syntheticLamNode,
+  mapField,
+)
 where
 
 import Control.Monad.RWS.Strict (MonadReader, ask)
 import Control.Monad.State.Strict (MonadState, State, gets, modify')
-import Covenant.ASG
-  ( ASGNode (ACompNode),
-    Id,
-    Ref (AnId),
-  )
+import Covenant.ASG (
+  ASGNode (ACompNode),
+  Id,
+  Ref (AnId),
+ )
 import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), MonadStub, trySelectHandler)
 import Covenant.Data (DatatypeInfo)
-import Covenant.ExtendedASG
-  ( ExtendedASG,
-    ExtendedId,
-    MonadASG (getASG, putASG),
-  )
+import Covenant.ExtendedASG (
+  ExtendedASG,
+  ExtendedId,
+  MonadASG (getASG, putASG),
+ )
 import Covenant.Index (Index)
 import Covenant.Test (CompNodeInfo (LamInternal))
-import Covenant.Transform.Common
-  ( TyFixerDataBundle,
-    TyFixerFnData,
-    TyFixerNodeKind (CataNode, IntroNode, MatchNode),
-  )
-import Covenant.Transform.Pipeline.Monad
-  ( Datatypes (Datatypes),
-    RepPolyHandlers,
-  )
+import Covenant.Transform.Common (
+  TyFixerDataBundle,
+  TyFixerFnData,
+  TyFixerNodeKind (CataNode, IntroNode, MatchNode),
+ )
+import Covenant.Transform.Pipeline.Monad (
+  Datatypes (Datatypes),
+  RepPolyHandlers,
+ )
 import Covenant.Transform.TyUtils (AppId, LambdaId)
-import Covenant.Type
-  ( AbstractTy (BoundAt),
-    CompT,
-    TyName (TyName),
-    ValT (Abstraction),
-  )
+import Covenant.Type (
+  AbstractTy (BoundAt),
+  CompT,
+  TyName (TyName),
+  ValT (Abstraction),
+ )
 import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -91,10 +91,10 @@ mapField l f r = R.update l (f (r R..! l)) r
 -- I dunno what the point of this was
 newtype MetaM r a = MetaM (State (Rec r) a)
   deriving
-    ( Functor,
-      Applicative,
-      Monad,
-      MonadState (Rec r)
+    ( Functor
+    , Applicative
+    , Monad
+    , MonadState (Rec r)
     )
     via (State (Rec r))
 

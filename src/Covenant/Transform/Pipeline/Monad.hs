@@ -1,45 +1,45 @@
-module Covenant.Transform.Pipeline.Monad
-  ( PassM,
-    CodeGen,
-    runCodeGen,
-    ASTRef (..),
-    Datatypes (..),
-    RepPolyHandlers (..),
-    runPass,
-    runPassNoErrors,
-    selectHandlerId,
-    noteNilFixer,
-    initRepPolyHandlers,
-  )
+module Covenant.Transform.Pipeline.Monad (
+  PassM,
+  CodeGen,
+  runCodeGen,
+  ASTRef (..),
+  Datatypes (..),
+  RepPolyHandlers (..),
+  runPass,
+  runPassNoErrors,
+  selectHandlerId,
+  noteNilFixer,
+  initRepPolyHandlers,
+)
 where
 
 import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT)
 import Control.Monad.RWS.Strict (MonadReader, RWST, runRWST)
-import Control.Monad.State.Strict
-  ( MonadState (get),
-    State,
-    evalState,
-    modify',
-  )
-import Covenant.CodeGen.Stubs
-  ( HandlerType (Embed, Proj),
-    HasStubError,
-    MonadStub,
-    StubError,
-    StubM,
-    compileStubM,
-    defStubs,
-    stubId,
-    trySelectHandler,
-  )
+import Control.Monad.State.Strict (
+  MonadState (get),
+  State,
+  evalState,
+  modify',
+ )
+import Covenant.CodeGen.Stubs (
+  HandlerType (Embed, Proj),
+  HasStubError,
+  MonadStub,
+  StubError,
+  StubM,
+  compileStubM,
+  defStubs,
+  stubId,
+  trySelectHandler,
+ )
 import Covenant.Data (DatatypeInfo)
-import Covenant.ExtendedASG
-  ( ExtendedASG,
-    MonadASG,
-    embeddingId,
-    forgetExtendedId,
-    projectionId,
-  )
+import Covenant.ExtendedASG (
+  ExtendedASG,
+  MonadASG,
+  embeddingId,
+  forgetExtendedId,
+  projectionId,
+ )
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
@@ -92,12 +92,12 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
   deriving
-    ( Functor,
-      Applicative,
-      Monad,
-      MonadASG,
-      MonadStub,
-      HasStubError
+    ( Functor
+    , Applicative
+    , Monad
+    , MonadASG
+    , MonadStub
+    , HasStubError
     )
     via (StubM (State ExtendedASG))
 
@@ -109,15 +109,15 @@ runCodeGen e (CodeGen act) = evalState (compileStubM defStubs act) e
 
 newtype PassM e r s a = PassM (ExceptT e (RWST r () s CodeGen) a)
   deriving
-    ( Functor,
-      Applicative,
-      Monad,
-      MonadASG,
-      MonadStub,
-      MonadReader r,
-      MonadState s,
-      HasStubError,
-      MonadError e
+    ( Functor
+    , Applicative
+    , Monad
+    , MonadASG
+    , MonadStub
+    , MonadReader r
+    , MonadState s
+    , HasStubError
+    , MonadError e
     )
     via (ExceptT e (RWST r () s CodeGen))
 
@@ -155,9 +155,9 @@ data ASTRef = ASTRef {underLams :: Vector Id, underApps :: Vector Id, appNodeId 
 
 data RepPolyHandlers
   = RepPolyHandlers
-  { ixedById :: Map Id (Term Name DefaultUni DefaultFun (), HandlerType, ValT AbstractTy),
-    ixedByType :: Map (ValT AbstractTy, HandlerType) Id,
-    -- This is stupid and shouldn't be here but it is kind of the only sensible place to put it
+  { ixedById :: Map Id (Term Name DefaultUni DefaultFun (), HandlerType, ValT AbstractTy)
+  , ixedByType :: Map (ValT AbstractTy, HandlerType) Id
+  , -- This is stupid and shouldn't be here but it is kind of the only sensible place to put it
     -- due to Nil being incredibly weird in how we have to handle it internally -_-
     nilTyFixers :: Set ASTRef
   }

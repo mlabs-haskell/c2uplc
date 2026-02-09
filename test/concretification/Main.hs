@@ -4,39 +4,39 @@
 
 module Main (main) where
 
-import Covenant.ASG
-  ( ASG,
-    ASGBuilder,
-    CovenantError,
-    Id,
-    Ref (AnArg, AnId),
-    app',
-    arg,
-    builtin2,
-    builtin3,
-    ctor',
-    defaultDatatypes,
-    force,
-    lam,
-    lazyLam,
-    lit,
-    match,
-    runASGBuilder,
-  )
+import Covenant.ASG (
+  ASG,
+  ASGBuilder,
+  CovenantError,
+  Id,
+  Ref (AnArg, AnId),
+  app',
+  arg,
+  builtin2,
+  builtin3,
+  ctor',
+  defaultDatatypes,
+  force,
+  lam,
+  lazyLam,
+  lit,
+  match,
+  runASGBuilder,
+ )
 import Covenant.Constant (AConstant (ABoolean, AnInteger))
 import Covenant.DeBruijn (DeBruijn (S, Z))
 import Covenant.Index (ix0, ix1, ix2)
 import Covenant.Prim (ThreeArgFunc (IfThenElse), TwoArgFunc (EqualsInteger))
 import Covenant.Test (concretifyMegaTest)
-import Covenant.Type
-  ( AbstractTy,
-    BuiltinFlatT (IntegerT),
-    CompT (Comp0, Comp1),
-    CompTBody (ReturnT, (:--:>)),
-    ValT (BuiltinFlat, ThunkT),
-    boolT,
-    tyvar,
-  )
+import Covenant.Type (
+  AbstractTy,
+  BuiltinFlatT (IntegerT),
+  CompT (Comp0, Comp1),
+  CompTBody (ReturnT, (:--:>)),
+  ValT (BuiltinFlat, ThunkT),
+  boolT,
+  tyvar,
+ )
 
 main :: IO ()
 main = case debugTest hiddenConcretificationTest of
@@ -111,9 +111,9 @@ smallerTest = lam topLevelTy $ do
   gi <- AnId <$> app' g [i]
   gb <- AnId <$> app' g [b]
   gi #== gb
-  where
-    topLevelTy :: CompT AbstractTy
-    topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
+ where
+  topLevelTy :: CompT AbstractTy
+  topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
 (#==) :: Ref -> Ref -> ASGBuilder Ref
 x #== y = do
@@ -143,9 +143,9 @@ noRigidsTest = lam topLevelTy $ do
   gi <- AnId <$> app' g [i]
   gb <- AnId <$> app' g [b]
   gi #== gb
-  where
-    topLevelTy :: CompT AbstractTy
-    topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
+ where
+  topLevelTy :: CompT AbstractTy
+  topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
 {-
 
@@ -199,9 +199,9 @@ hiddenConcretificationTest = lam topLevelTy $ do
   intResult <- AnId <$> app' rigidBinder [i, AnId identitee]
   boolResult <- AnId <$> app' rigidBinder [b, AnId boolToInt]
   AnId <$> (intResult #&& boolResult)
-  where
-    topLevelTy :: CompT AbstractTy
-    topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
+ where
+  topLevelTy :: CompT AbstractTy
+  topLevelTy = Comp0 $ intT :--:> boolT :--:> ReturnT boolT
 
 (#&&) :: Ref -> Ref -> ASGBuilder Id
 b1 #&& b2 = do
@@ -227,10 +227,10 @@ rigidBinderTest = lam rigidBinderTy $ do
     AnId <$> match (AnId m) [AnId justHandler, AnId nothingHandler]
   zero <- AnId <$> lit (AnInteger 0)
   AnId <$> app' f [zero]
-  where
-    rigidBinderTy :: CompT AbstractTy
-    rigidBinderTy =
-      Comp1 $
-        tyvar Z ix0
-          :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT intT)
-          :--:> ReturnT boolT
+ where
+  rigidBinderTy :: CompT AbstractTy
+  rigidBinderTy =
+    Comp1 $
+      tyvar Z ix0
+        :--:> ThunkT (Comp0 $ tyvar (S Z) ix0 :--:> ReturnT intT)
+        :--:> ReturnT boolT

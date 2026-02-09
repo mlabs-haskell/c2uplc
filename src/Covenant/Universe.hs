@@ -3,54 +3,54 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Covenant.Universe
-  ( UniProof (..),
-    ListProof (..),
-    analyzeListTy,
-    unsafeReflect,
-  )
+module Covenant.Universe (
+  UniProof (..),
+  ListProof (..),
+  analyzeListTy,
+  unsafeReflect,
+)
 where
 
 import Covenant.Data (DatatypeInfo)
-import Covenant.Type
-  ( AbstractTy,
-    BuiltinFlatT
-      ( BLS12_381_G1_ElementT,
-        BLS12_381_G2_ElementT,
-        BLS12_381_MlResultT,
-        BoolT,
-        ByteStringT,
-        IntegerT,
-        StringT,
-        UnitT
-      ),
-    DataDeclaration (DataDeclaration, OpaqueData),
-    DataEncoding (PlutusData),
-    TyName,
-    ValT (BuiltinFlat, Datatype),
-  )
+import Covenant.Type (
+  AbstractTy,
+  BuiltinFlatT (
+    BLS12_381_G1_ElementT,
+    BLS12_381_G2_ElementT,
+    BLS12_381_MlResultT,
+    BoolT,
+    ByteStringT,
+    IntegerT,
+    StringT,
+    UnitT
+  ),
+  DataDeclaration (DataDeclaration, OpaqueData),
+  DataEncoding (PlutusData),
+  TyName,
+  ValT (BuiltinFlat, Datatype),
+ )
 import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Vector qualified as V
 import Optics.Core (view)
-import PlutusCore.Default
-  ( DefaultUni
-      ( DefaultUniApply,
-        DefaultUniBLS12_381_G1_Element,
-        DefaultUniBLS12_381_G2_Element,
-        DefaultUniBLS12_381_MlResult,
-        DefaultUniBool,
-        DefaultUniByteString,
-        DefaultUniData,
-        DefaultUniInteger,
-        DefaultUniProtoList,
-        DefaultUniProtoPair,
-        DefaultUniString,
-        DefaultUniUnit
-      ),
-    Esc,
-  )
+import PlutusCore.Default (
+  DefaultUni (
+    DefaultUniApply,
+    DefaultUniBLS12_381_G1_Element,
+    DefaultUniBLS12_381_G2_Element,
+    DefaultUniBLS12_381_MlResult,
+    DefaultUniBool,
+    DefaultUniByteString,
+    DefaultUniData,
+    DefaultUniInteger,
+    DefaultUniProtoList,
+    DefaultUniProtoPair,
+    DefaultUniString,
+    DefaultUniUnit
+  ),
+  Esc,
+ )
 
 {- An existentially quantified GADT witness of default universe membership.
 
@@ -131,14 +131,14 @@ decideUniType dtDict = \case
           _ -> Nothing
         _ -> Nothing
   _ -> Nothing
-  where
-    hasDataEncoding :: TyName -> Bool
-    hasDataEncoding tn = case view #originalDecl <$> M.lookup tn dtDict of
-      Nothing -> False
-      Just OpaqueData {} -> True
-      Just (DataDeclaration _ _ _ enc) -> case enc of
-        PlutusData _ -> True
-        _ -> False
+ where
+  hasDataEncoding :: TyName -> Bool
+  hasDataEncoding tn = case view #originalDecl <$> M.lookup tn dtDict of
+    Nothing -> False
+    Just OpaqueData{} -> True
+    Just (DataDeclaration _ _ _ enc) -> case enc of
+      PlutusData _ -> True
+      _ -> False
 
 {- This expect a List ValT and will return nothing if given anything else.
 
@@ -157,10 +157,10 @@ analyzeListTy ::
 analyzeListTy dtDict valT = case decideUniType dtDict valT of
   Nothing -> Nothing
   Just (MkUniProof hopefullyAList) -> go hopefullyAList
-  where
-    go :: forall (a :: Type). DefaultUni (Esc a) -> Maybe (Integer, UniProof)
-    go = \case
-      DefaultUniApply DefaultUniProtoList t -> case go t of
-        Nothing -> Just (0, MkUniProof t)
-        Just (acc, t') -> Just (1 + acc, t')
-      _ -> Nothing
+ where
+  go :: forall (a :: Type). DefaultUni (Esc a) -> Maybe (Integer, UniProof)
+  go = \case
+    DefaultUniApply DefaultUniProtoList t -> case go t of
+      Nothing -> Just (0, MkUniProof t)
+      Just (acc, t') -> Just (1 + acc, t')
+    _ -> Nothing
