@@ -120,7 +120,7 @@ mkCatamorphism tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
                 let enc = view #datatypeEncoding nonOpaqueDecl
                 let schema = mkTypeSchema False enc cataFunTy
                     cataFunName = "cata_" <> tyNameInner
-                compiled <- pFix =<< genCataPLC cataFunTy cataFunName enc schema
+                compiled <-  genCataPLC cataFunTy cataFunName enc schema
                 let here = TyFixerFnData tn enc cataFunTy compiled schema cataFunName CataNode
                 pure . Just $ here
     genCataPLC ::
