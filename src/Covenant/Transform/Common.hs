@@ -4,58 +4,58 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 
-module Covenant.Transform.Common (
-  TyFixerFnData (..),
-  TyFixerNodeKind (..),
-  TyFixerDataBundle (..),
-  tyFixerFnTy,
-  nextId,
-  freshName,
-  freshNamePrefix,
-  genLambdaArgNames,
-  countToTyVars,
-  pFreshLam,
-  pFreshLam',
-  pFreshLam2,
-  pFreshLam2',
-  pFreshLam3,
-  pFreshLam3',
-  pLetM,
-  pLetM',
-  pCaseList,
-  unsafeUnThunk,
-  pCaseListWith,
-  genFiniteListEliminator,
-  pCaseConstrData,
-  BuiltinFnData (..),
-)
+module Covenant.Transform.Common
+  ( TyFixerFnData (..),
+    TyFixerNodeKind (..),
+    TyFixerDataBundle (..),
+    tyFixerFnTy,
+    nextId,
+    freshName,
+    freshNamePrefix,
+    genLambdaArgNames,
+    countToTyVars,
+    pFreshLam,
+    pFreshLam',
+    pFreshLam2,
+    pFreshLam2',
+    pFreshLam3,
+    pFreshLam3',
+    pLetM,
+    pLetM',
+    pCaseList,
+    unsafeUnThunk,
+    pCaseListWith,
+    genFiniteListEliminator,
+    pCaseConstrData,
+    BuiltinFnData (..),
+  )
 where
 
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.ExtendedASG (MonadASG, nextId)
 import Covenant.Index (Count, intCount, intIndex)
-import Covenant.Plutus (
-  pApp,
-  pCase,
-  pFst,
-  pLam,
-  pSnd,
-  pVar,
-  unConstrData,
- )
+import Covenant.Plutus
+  ( pApp,
+    pCase,
+    pFst,
+    pLam,
+    pSnd,
+    pVar,
+    unConstrData,
+  )
 import Covenant.Test (Id (UnsafeMkId))
 import Covenant.Transform.Schema (TypeSchema)
-import Covenant.Type (
-  AbstractTy (BoundAt),
-  CompT (CompN),
-  CompTBody (ArgsAndResult),
-  DataEncoding,
-  TyName,
-  ValT (Abstraction, ThunkT),
- )
-import Data.Foldable (
-  foldl',
- )
+import Covenant.Type
+  ( AbstractTy (BoundAt),
+    CompT (CompN),
+    CompTBody (ArgsAndResult),
+    DataEncoding,
+    TyName,
+    ValT (Abstraction, ThunkT),
+  )
+import Data.Foldable
+  ( foldl',
+  )
 import Data.Kind (Type)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -63,10 +63,10 @@ import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Optics.Core (preview, review)
-import PlutusCore.Name.Unique (
-  Name (Name),
-  Unique (Unique),
- )
+import PlutusCore.Name.Unique
+  ( Name (Name),
+    Unique (Unique),
+  )
 import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 
 {- This records the information we need for our "mock" functions for catamorphisms/datatype intro/datatype elimination
@@ -181,24 +181,24 @@ genLambdaArgNames ::
   Vector a ->
   m (Vector Name)
 genLambdaArgNames nameBase = Vector.imapM genTermVarName
- where
-  genTermVarName :: Int -> a -> m Name
-  genTermVarName pos _ = do
-    UnsafeMkId i <- nextId
-    let textPart = nameBase <> "_arg" <> T.pack (show pos)
-        uniquePart = Unique (fromIntegral i)
-    pure $ Name textPart uniquePart
+  where
+    genTermVarName :: Int -> a -> m Name
+    genTermVarName pos _ = do
+      UnsafeMkId i <- nextId
+      let textPart = nameBase <> "_arg" <> T.pack (show pos)
+          uniquePart = Unique (fromIntegral i)
+      pure $ Name textPart uniquePart
 
 countToTyVars :: Count "tyvar" -> Vector (ValT AbstractTy)
 countToTyVars cnt
   | cntI == 0 = mempty
   | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
- where
-  cntI :: Int
-  cntI = review intCount cnt
+  where
+    cntI :: Int
+    cntI = review intCount cnt
 
-  mkTV :: Int -> ValT AbstractTy
-  mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
+    mkTV :: Int -> ValT AbstractTy
+    mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
 
 -- We could probably steal the plutarch typeclass trick to get arbitrary embedded lambdas... but
 -- that's overkill here
@@ -330,21 +330,21 @@ pCaseListWith ::
   m (Term Name DefaultUni DefaultFun ())
 pCaseListWith [] _ withElems _ = withElems [] -- only thing we can do
 pCaseListWith (x : xs) withHead withElems aList = go [] aList x xs
- where
-  go ::
-    [Term Name DefaultUni DefaultFun ()] ->
-    Term Name DefaultUni DefaultFun () ->
-    a ->
-    [a] ->
-    m (Term Name DefaultUni DefaultFun ())
-  go termAcc remList t [] = pCaseList remList $ \y _ys -> do
-    yTerm <- withHead t y
-    let args = termAcc <> [yTerm]
-    withElems args
-  go termAcc remList t (tx : ts) = pCaseList remList $ \y ys -> do
-    yTerm <- withHead t y
-    let termAcc' = termAcc <> [yTerm]
-    go termAcc' ys tx ts
+  where
+    go ::
+      [Term Name DefaultUni DefaultFun ()] ->
+      Term Name DefaultUni DefaultFun () ->
+      a ->
+      [a] ->
+      m (Term Name DefaultUni DefaultFun ())
+    go termAcc remList t [] = pCaseList remList $ \y _ys -> do
+      yTerm <- withHead t y
+      let args = termAcc <> [yTerm]
+      withElems args
+    go termAcc remList t (tx : ts) = pCaseList remList $ \y ys -> do
+      yTerm <- withHead t y
+      let termAcc' = termAcc <> [yTerm]
+      go termAcc' ys tx ts
 
 genFiniteListEliminator ::
   forall m.
@@ -360,21 +360,21 @@ genFiniteListEliminator ::
   m (Term Name DefaultUni DefaultFun ())
 genFiniteListEliminator branchHandler aList resolveProjection elTys =
   pCaseListWith elTys withHead finalizer aList
- where
-  withHead ::
-    ValT AbstractTy ->
-    Term Name DefaultUni DefaultFun () ->
-    m (Term Name DefaultUni DefaultFun ())
-  withHead ty headEl =
-    resolveProjection ty >>= \case
-      Just projVar -> do
-        let result = pApp projVar headEl
-        pure result
-      Nothing -> pure headEl
-  finalizer ::
-    [Term Name DefaultUni DefaultFun ()] ->
-    m (Term Name DefaultUni DefaultFun ())
-  finalizer = pure . foldl' pApp branchHandler
+  where
+    withHead ::
+      ValT AbstractTy ->
+      Term Name DefaultUni DefaultFun () ->
+      m (Term Name DefaultUni DefaultFun ())
+    withHead ty headEl =
+      resolveProjection ty >>= \case
+        Just projVar -> do
+          let result = pApp projVar headEl
+          pure result
+        Nothing -> pure headEl
+    finalizer ::
+      [Term Name DefaultUni DefaultFun ()] ->
+      m (Term Name DefaultUni DefaultFun ())
+    finalizer = pure . foldl' pApp branchHandler
 
 {- This is a convenience helper for generating case expressions over constructor encoded datatypes which
    are (hopefully) fairly performant.
@@ -420,10 +420,10 @@ pCaseConstrData scrutinee typedHandlers lookupShim = do
           _ -> []
     genFiniteListEliminator handler ctorArgs lookupShim hArgs
   pure $ pCase ctorIx plcHandlers
- where
-  constrDataPair = unConstrData scrutinee
-  ctorIx = pFst constrDataPair
-  ctorArgs = pSnd constrDataPair
+  where
+    constrDataPair = unConstrData scrutinee
+    ctorIx = pFst constrDataPair
+    ctorArgs = pSnd constrDataPair
 
 {- Given a branch handler, a scrutinee, a way to lookup the projection function, and a list of types representing the
    Covenant types of elements, construct an expression that extracts the arguments from the handler and applies the handler

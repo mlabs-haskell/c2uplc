@@ -9,35 +9,35 @@
 module Main (main) where
 
 import Covenant.CodeGen (evalTerm)
-import Covenant.CodeGen.Stubs (
-  StubM,
-  compileStub',
-  defStubs,
-  pInt,
-  resolveStub,
- )
+import Covenant.CodeGen.Stubs
+  ( StubM,
+    compileStub',
+    defStubs,
+    pInt,
+    resolveStub,
+  )
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG (MonadASG)
-import Covenant.Plutus (
-  pBuiltin,
-  prettyPTerm,
-  (#),
-  (#-),
- )
+import Covenant.Plutus
+  ( pBuiltin,
+    prettyPTerm,
+    (#),
+    (#-),
+  )
 import Covenant.Prim (OneArgFunc (IData, UnIData))
 import Covenant.Test (list, unsafeMkDatatypeInfos)
-import Covenant.Transform.Common (
-  pFreshLam,
-  pFreshLam',
-  pFreshLam2',
-  pFreshLam3',
- )
-import Covenant.Type (
-  AbstractTy,
-  BuiltinFlatT (IntegerT),
-  TyName,
-  ValT (BuiltinFlat, Datatype),
- )
+import Covenant.Transform.Common
+  ( pFreshLam,
+    pFreshLam',
+    pFreshLam2',
+    pFreshLam3',
+  )
+import Covenant.Type
+  ( AbstractTy,
+    BuiltinFlatT (IntegerT),
+    TyName,
+    ValT (BuiltinFlat, Datatype),
+  )
 import Data.Map (Map)
 import PlutusCore.Data (Data (I, List))
 import PlutusCore.MkPlc (mkConstant)
@@ -166,6 +166,6 @@ runTest stub' = case compileStub' stub of
       Right res -> do
         putStrLn "Success! Evaluation result: "
         print (prettyPTerm res)
- where
-  stub :: forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
-  stub = defStubs >> stub'
+  where
+    stub :: forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
+    stub = defStubs >> stub'

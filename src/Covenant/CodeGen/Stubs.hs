@@ -5,123 +5,123 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Covenant.CodeGen.Stubs (
-  StubM,
-  HandlerType (..),
-  HasStubError (..),
-  MonadStub (..),
-  StubError (..),
-  compileStubM,
-  defStubs,
-  compileStub',
-  pInt,
-  stubId,
-  trySelectHandler,
-  resolveStub,
-  mkNil,
-)
+module Covenant.CodeGen.Stubs
+  ( StubM,
+    HandlerType (..),
+    HasStubError (..),
+    MonadStub (..),
+    StubError (..),
+    compileStubM,
+    defStubs,
+    compileStub',
+    pInt,
+    stubId,
+    trySelectHandler,
+    resolveStub,
+    mkNil,
+  )
 where
 
 import Algebra.Graph.AdjacencyMap (fromAdjacencySets)
 import Algebra.Graph.AdjacencyMap.Algorithm (Cycle, reachable, topSort)
-import Control.Monad.Except (
-  ExceptT (ExceptT),
-  MonadError (throwError),
-  runExceptT,
- )
+import Control.Monad.Except
+  ( ExceptT (ExceptT),
+    MonadError (throwError),
+    runExceptT,
+  )
 import Control.Monad.RWS.Strict (RWST (RWST))
-import Control.Monad.State.Strict (
-  MonadState (get, put),
-  MonadTrans (lift),
-  StateT (runStateT),
-  modify',
- )
+import Control.Monad.State.Strict
+  ( MonadState (get, put),
+    MonadTrans (lift),
+    StateT (runStateT),
+    modify',
+  )
 import Covenant.ASG (ASGNode (AnError))
 import Covenant.ArgDict (pValT)
 import Covenant.Data (DatatypeInfo)
-import Covenant.ExtendedASG (
-  ExtendedId (EphemeralError),
-  MonadASG (getASG, putASG),
-  eInsert,
-  runWithEmptyASG,
- )
-import Covenant.Plutus (
-  caseConstrEnum,
-  pBuiltin,
-  pCase,
-  pCons,
-  pDelay,
-  pError,
-  pForce,
-  pFst,
-  pIf,
-  pLet,
-  pNilData,
-  pSnd,
-  pVar,
-  (#),
-  (#!),
-  (#+),
-  (#-),
-  (#<),
-  (#<=),
-  (#==),
- )
-import Covenant.Prim (
-  OneArgFunc (
-    BData,
-    BLS12_381_G1_compress,
-    BLS12_381_G1_uncompress,
-    BLS12_381_G2_compress,
-    BLS12_381_G2_uncompress,
-    DecodeUtf8,
-    EncodeUtf8,
-    HeadList,
-    IData,
-    ListData,
-    MapData,
-    UnBData,
-    UnConstrData,
-    UnIData,
-    UnListData,
-    UnMapData
-  ),
-  SixArgFunc (ChooseData),
-  TwoArgFunc (ConstrData, MkPairData),
- )
+import Covenant.ExtendedASG
+  ( ExtendedId (EphemeralError),
+    MonadASG (getASG, putASG),
+    eInsert,
+    runWithEmptyASG,
+  )
+import Covenant.Plutus
+  ( caseConstrEnum,
+    pBuiltin,
+    pCase,
+    pCons,
+    pDelay,
+    pError,
+    pForce,
+    pFst,
+    pIf,
+    pLet,
+    pNilData,
+    pSnd,
+    pVar,
+    (#),
+    (#!),
+    (#+),
+    (#-),
+    (#<),
+    (#<=),
+    (#==),
+  )
+import Covenant.Prim
+  ( OneArgFunc
+      ( BData,
+        BLS12_381_G1_compress,
+        BLS12_381_G1_uncompress,
+        BLS12_381_G2_compress,
+        BLS12_381_G2_uncompress,
+        DecodeUtf8,
+        EncodeUtf8,
+        HeadList,
+        IData,
+        ListData,
+        MapData,
+        UnBData,
+        UnConstrData,
+        UnIData,
+        UnListData,
+        UnMapData
+      ),
+    SixArgFunc (ChooseData),
+    TwoArgFunc (ConstrData, MkPairData),
+  )
 import Covenant.Test (Id (UnsafeMkId))
-import Covenant.Transform.Common (
-  freshNamePrefix,
-  pCaseList,
-  pFreshLam,
-  pFreshLam',
-  pFreshLam2,
-  pFreshLam2',
-  pFreshLam3,
-  pFreshLam3',
-  pLetM,
-  pLetM',
- )
-import Covenant.Type (
-  AbstractTy,
-  BuiltinFlatT (
-    BLS12_381_G1_ElementT,
-    BLS12_381_G2_ElementT,
-    BoolT,
-    ByteStringT,
-    IntegerT,
-    StringT,
-    UnitT
-  ),
-  TyName,
-  ValT (BuiltinFlat, Datatype),
- )
-import Covenant.Universe (
-  ListProof (MkListProof),
-  UniProof (MkUniProof),
-  analyzeListTy,
-  unsafeReflect,
- )
+import Covenant.Transform.Common
+  ( freshNamePrefix,
+    pCaseList,
+    pFreshLam,
+    pFreshLam',
+    pFreshLam2,
+    pFreshLam2',
+    pFreshLam3,
+    pFreshLam3',
+    pLetM,
+    pLetM',
+  )
+import Covenant.Type
+  ( AbstractTy,
+    BuiltinFlatT
+      ( BLS12_381_G1_ElementT,
+        BLS12_381_G2_ElementT,
+        BoolT,
+        ByteStringT,
+        IntegerT,
+        StringT,
+        UnitT
+      ),
+    TyName,
+    ValT (BuiltinFlat, Datatype),
+  )
+import Covenant.Universe
+  ( ListProof (MkListProof),
+    UniProof (MkUniProof),
+    analyzeListTy,
+    unsafeReflect,
+  )
 import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -132,15 +132,15 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as Vector
 import PlutusCore.Data (Data (Constr))
-import PlutusCore.Default (
-  DefaultUni (
-    DefaultUniApply,
-    DefaultUniData,
-    DefaultUniProtoList,
-    DefaultUniProtoPair
-  ),
-  Esc,
- )
+import PlutusCore.Default
+  ( DefaultUni
+      ( DefaultUniApply,
+        DefaultUniData,
+        DefaultUniProtoList,
+        DefaultUniProtoPair
+      ),
+    Esc,
+  )
 import PlutusCore.MkPlc (mkConstant, mkConstantOf)
 import PlutusCore.Name.Unique (Name (Name), Unique (Unique))
 import UntypedPlutusCore (DefaultFun, Term)
@@ -230,31 +230,31 @@ defStubs = do
 {- r -> (r -> r) -> Integer -> r -}
 _cataNat :: forall m. (MonadStub m) => m ()
 _cataNat = declare "cataNat" body
- where
-  body :: m (Term Name DefaultUni DefaultFun ())
-  body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-    recNat <- resolveStub "recNat"
-    let nIsNegative = n #< pInt 0
-    pure $
-      pIf
-        nIsNegative
-        pError
-        (recNat # whenZ # whenS # n)
+  where
+    body :: m (Term Name DefaultUni DefaultFun ())
+    body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+      recNat <- resolveStub "recNat"
+      let nIsNegative = n #< pInt 0
+      pure $
+        pIf
+          nIsNegative
+          pError
+          (recNat # whenZ # whenS # n)
 
 {- r -> (r -> r) -> Integer -> r -}
 _cataNeg :: forall m. (MonadStub m) => m ()
 _cataNeg = declare "cataNeg" body
- where
-  body :: m (Term Name DefaultUni DefaultFun ())
-  body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-    pNot <- resolveStub "not"
-    recNeg <- resolveStub "recNeg"
-    let nIsPositive = pNot # (n #<= pInt 0)
-    pure $
-      pIf
-        nIsPositive
-        pError
-        (recNeg # whenZ # whenS # n)
+  where
+    body :: m (Term Name DefaultUni DefaultFun ())
+    body = pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+      pNot <- resolveStub "not"
+      recNeg <- resolveStub "recNeg"
+      let nIsPositive = pNot # (n #<= pInt 0)
+      pure $
+        pIf
+          nIsPositive
+          pError
+          (recNeg # whenZ # whenS # n)
 
 -- TODO need to test this
 _cataByteString :: forall m. (MonadStub m) => m ()
@@ -262,18 +262,18 @@ _cataByteString = declare "cataByteString" $ do
   fix <- resolveStub "fix"
   body <- go
   pure $ fix # body
- where
-  go :: m (Term Name DefaultUni DefaultFun ())
-  go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
-    pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
-      pure $
-        pIf
-          (ix #== len)
-          whenEmpty
-          ( whenNonEmpty
-              # (originalBS #! ix)
-              # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #+ pInt 1))
-          )
+  where
+    go :: m (Term Name DefaultUni DefaultFun ())
+    go = pFreshLam3' "self" "whenEmpty" "whenNotEmpty" $ \self whenEmpty whenNonEmpty ->
+      pFreshLam3' "originalBS" "len" "ix" $ \originalBS len ix -> do
+        pure $
+          pIf
+            (ix #== len)
+            whenEmpty
+            ( whenNonEmpty
+                # (originalBS #! ix)
+                # (self # whenEmpty # whenNonEmpty # originalBS # len # (ix #+ pInt 1))
+            )
 
 --
 _cataList :: forall m. (MonadStub m) => m ()
@@ -317,11 +317,11 @@ mkNil dtDict valT
         mkSelectNil uni
         selectNil <- resolveStub selectNilNm
         pure . Just $ selectNil # pInt depth
- where
-  listOfPairs (Datatype "List" args) = case args Vector.! 0 of
-    Datatype "Pair" _ -> True
-    _ -> False
-  listOfPairs _ = False
+  where
+    listOfPairs (Datatype "List" args) = case args Vector.! 0 of
+      Datatype "Pair" _ -> True
+      _ -> False
+    listOfPairs _ = False
 
 -- :: a -> b -> (a -> Data) -> (b -> Data) -> Pair a b
 _mkPair :: forall m. (MonadStub m) => m ()
@@ -360,16 +360,16 @@ _matchData = declare "matchData" $
           # (pForce goList # (pBuiltin UnListData # dat))
           # (pForce goI # (pBuiltin UnIData # dat))
           # (pForce goB # (pBuiltin UnBData # dat))
- where
-  asCtor ::
-    Term Name DefaultUni DefaultFun () ->
-    Term Name DefaultUni DefaultFun () ->
-    m (Term Name DefaultUni DefaultFun ())
-  asCtor goCtor scrut = do
-    pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
-      let ctorIx = pFst scrutAsIntDataPair
-          ctorArgs = pSnd scrutAsIntDataPair
-      pure $ pForce goCtor # ctorIx # ctorArgs
+  where
+    asCtor ::
+      Term Name DefaultUni DefaultFun () ->
+      Term Name DefaultUni DefaultFun () ->
+      m (Term Name DefaultUni DefaultFun ())
+    asCtor goCtor scrut = do
+      pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
+        let ctorIx = pFst scrutAsIntDataPair
+            ctorArgs = pSnd scrutAsIntDataPair
+        pure $ pForce goCtor # ctorIx # ctorArgs
 
 _matchPair :: forall m. (MonadStub m) => m ()
 _matchPair = declare "matchPair" $
@@ -533,8 +533,8 @@ runStubM :: forall m a. (MonadASG m) => StubM m () -> StubM m a -> m (Either Stu
 runStubM (StubM scope) (StubM act') = do
   (\(e, cxt) -> case e of Left e' -> Left e'; Right res -> Right (cxt, res))
     <$> runStateT (runExceptT act) (StubContext mempty mempty mempty)
- where
-  act = scope >> act'
+  where
+    act = scope >> act'
 
 -- this let-binds all of the dependencies after performing dependency analysis. ugh
 compileStubM ::
@@ -559,25 +559,25 @@ compileStubM scope act =
       case topSort onlyTrueDeps of
         Left ohNoACycle -> pure (Left $ DepCycle ohNoACycle)
         Right (reverse -> depsInOrder) -> pure $ foldr (letBindEm binds) (Right inner) depsInOrder
- where
-  letBindEm ::
-    forall a.
-    Map Text (Name, Term Name DefaultUni DefaultFun (), a) ->
-    Text ->
-    Either StubError (Term Name DefaultUni DefaultFun ()) ->
-    Either StubError (Term Name DefaultUni DefaultFun ())
-  letBindEm dict txtNm acc = case M.lookup txtNm dict of
-    Nothing -> Left $ NoBinding txtNm
-    Just (pNm, body, _) -> pLet pNm body <$> acc
+  where
+    letBindEm ::
+      forall a.
+      Map Text (Name, Term Name DefaultUni DefaultFun (), a) ->
+      Text ->
+      Either StubError (Term Name DefaultUni DefaultFun ()) ->
+      Either StubError (Term Name DefaultUni DefaultFun ())
+    letBindEm dict txtNm acc = case M.lookup txtNm dict of
+      Nothing -> Left $ NoBinding txtNm
+      Just (pNm, body, _) -> pLet pNm body <$> acc
 
 -- for testing
 compileStub' ::
   (forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())) ->
   Either StubError (Term Name DefaultUni DefaultFun ())
 compileStub' act = runWithEmptyASG compiled
- where
-  compiled :: forall m. (MonadASG m) => m (Either StubError (Term Name DefaultUni DefaultFun ()))
-  compiled = compileStubM defStubs act
+  where
+    compiled :: forall m. (MonadASG m) => m (Either StubError (Term Name DefaultUni DefaultFun ()))
+    compiled = compileStubM defStubs act
 
 data HandlerType = Proj | Embed
   deriving stock (Show, Eq, Ord)
@@ -665,23 +665,23 @@ _embedList ::
   (MonadStub m) =>
   m ()
 _embedList = declare "embedList" fun
- where
-  listify x = pBuiltin ListData # x
-  -- morally: Integer -> ((a -> b) -> List a -> List b) -> ... (can't express this without dep types see above)
-  mkGo :: m (Term Name DefaultUni DefaultFun ())
-  mkGo =
-    pFreshLam3' "go_Depth" "go_embEl" "go_mapF" $ \depth embEl mapF -> do
-      recNat <- resolveStub "recNat"
-      goS <- pFreshLam2' "f" "xs" $ \f xs -> pure $ listify (mapF # f # xs)
-      pure $ recNat # embEl # goS # depth
-  fun :: m (Term Name DefaultUni DefaultFun ())
-  fun = pFreshLam3' "fun_Depth" "fun_embEl" "fun_xs" $ \depth innerF xs -> do
-    map' <- resolveStub "map"
-    pLetM (map' # pNilData) $ \mapF -> do
-      go <- mkGo
-      let goF = go # depth # innerF # mapF
-          resList = mapF # goF # xs
-      pure $ pBuiltin ListData # resList
+  where
+    listify x = pBuiltin ListData # x
+    -- morally: Integer -> ((a -> b) -> List a -> List b) -> ... (can't express this without dep types see above)
+    mkGo :: m (Term Name DefaultUni DefaultFun ())
+    mkGo =
+      pFreshLam3' "go_Depth" "go_embEl" "go_mapF" $ \depth embEl mapF -> do
+        recNat <- resolveStub "recNat"
+        goS <- pFreshLam2' "f" "xs" $ \f xs -> pure $ listify (mapF # f # xs)
+        pure $ recNat # embEl # goS # depth
+    fun :: m (Term Name DefaultUni DefaultFun ())
+    fun = pFreshLam3' "fun_Depth" "fun_embEl" "fun_xs" $ \depth innerF xs -> do
+      map' <- resolveStub "map"
+      pLetM (map' # pNilData) $ \mapF -> do
+        go <- mkGo
+        let goF = go # depth # innerF # mapF
+            resList = mapF # goF # xs
+        pure $ pBuiltin ListData # resList
 
 {- The dual of embedList.
 
@@ -707,25 +707,25 @@ projList ::
   (MonadStub m) =>
   DefaultUni (Esc a) -> m (Term Name DefaultUni DefaultFun ())
 projList wit = body
- where
-  body :: m (Term Name DefaultUni DefaultFun ())
-  body = pFreshLam2' "projEl" "depth" $ \projEl depth -> do
-    mkNil' <- resolveStub (selectNilName wit)
-    go <- mkGo mkNil'
-    pure $ go # depth # projEl
-  unList :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
-  unList t = pBuiltin UnListData # t
-  -- Integer -> (Data -> a) -> Data -> [a]
-  mkGo :: Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())
-  mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
-    recNat <- resolveStub "recNatN"
-    mapF <- resolveStub "map"
-    goS <- pFreshLam3' "n" "f" "ys" $ \n f ys -> do
-      pure $ (mapF # (nil # n)) # f # unList ys
-    goZ <- do
-      let map0 = mapF # (nil # mkConstant @Integer () 0)
-      pFreshLam' "goZ_xs" $ \xs -> pure $ map0 # projEl # unList xs
-    pure (recNat # goZ # goS # depth)
+  where
+    body :: m (Term Name DefaultUni DefaultFun ())
+    body = pFreshLam2' "projEl" "depth" $ \projEl depth -> do
+      mkNil' <- resolveStub (selectNilName wit)
+      go <- mkGo mkNil'
+      pure $ go # depth # projEl
+    unList :: Term Name DefaultUni DefaultFun () -> Term Name DefaultUni DefaultFun ()
+    unList t = pBuiltin UnListData # t
+    -- Integer -> (Data -> a) -> Data -> [a]
+    mkGo :: Term Name DefaultUni DefaultFun () -> m (Term Name DefaultUni DefaultFun ())
+    mkGo nil = pFreshLam2' "depth" "projEl" $ \depth projEl -> do
+      recNat <- resolveStub "recNatN"
+      mapF <- resolveStub "map"
+      goS <- pFreshLam3' "n" "f" "ys" $ \n f ys -> do
+        pure $ (mapF # (nil # n)) # f # unList ys
+      goZ <- do
+        let map0 = mapF # (nil # mkConstant @Integer () 0)
+        pFreshLam' "goZ_xs" $ \xs -> pure $ map0 # projEl # unList xs
+      pure (recNat # goZ # goS # depth)
 
 {- The version we'll actually use.  -}
 projListWithType ::
@@ -789,9 +789,9 @@ _projBool = declare "projBool" $ pFreshLam' "b" $ \b ->
 _embedBool :: (MonadStub m) => m ()
 _embedBool = declare "embedBool" $ pFreshLam' "b" $ \b ->
   pure $ pIf b troo fawlse
- where
-  troo = mkConstant () $ Constr 0 []
-  fawlse = mkConstant () $ Constr 1 []
+  where
+    troo = mkConstant () $ Constr 0 []
+    fawlse = mkConstant () $ Constr 1 []
 
 --   Int Projection / Embedding
 --   ***************************
@@ -905,10 +905,10 @@ _recNat = declare "recNat" $ do
   fix <- resolveStub "fix"
   body <- go
   pure $ fix # body
- where
-  go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-    let isZero = n #<= pInt 0
-    pure $ pIf isZero whenZ (whenS # (self # whenZ # whenS # (n #- pInt 1)))
+  where
+    go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+      let isZero = n #<= pInt 0
+      pure $ pIf isZero whenZ (whenS # (self # whenZ # whenS # (n #- pInt 1)))
 
 --  r -> (r -> Integer -> r) ->  Integer -> r
 _recNatN :: (MonadStub m) => m ()
@@ -916,25 +916,25 @@ _recNatN = declare "recNatN" $ do
   fix <- resolveStub "fix"
   body <- go
   pure $ fix # body
- where
-  go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-    let isZero = n #== pInt 0
-        whenS' = whenS # n
-    pure $ pIf isZero whenZ (whenS' # (self # whenZ # whenS # (n #- pInt 1)))
+  where
+    go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+      let isZero = n #== pInt 0
+          whenS' = whenS # n
+      pure $ pIf isZero whenZ (whenS' # (self # whenZ # whenS # (n #- pInt 1)))
 
 _recNeg :: (MonadStub m) => m ()
 _recNeg = declare "recNeg" $ do
   fix <- resolveStub "fix"
   body <- go
   pure $ fix # body
- where
-  go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
-    let isZero = n #== pInt 0
-    pure $
-      pIf
-        isZero
-        whenZ
-        (whenS # (self # whenZ # whenS # (n #+ pInt 1)))
+  where
+    go = pFreshLam' "self" $ \self -> pFreshLam3' "whenZ" "whenS" "n" $ \whenZ whenS n -> do
+      let isZero = n #== pInt 0
+      pure $
+        pIf
+          isZero
+          whenZ
+          (whenS # (self # whenZ # whenS # (n #+ pInt 1)))
 
 {-
     ***************
@@ -1023,18 +1023,18 @@ mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
       , mkList 9
       , mkList 10
       ]
- where
-  declNm = selectNilName uni
+  where
+    declNm = selectNilName uni
 
-  mkList :: Int -> Term Name DefaultUni DefaultFun ()
-  mkList n = case mkWitness n of
-    MkListProof wit -> mkConstantOf () wit []
+    mkList :: Int -> Term Name DefaultUni DefaultFun ()
+    mkList n = case mkWitness n of
+      MkListProof wit -> mkConstantOf () wit []
 
-  mkWitness :: Int -> ListProof
-  mkWitness n
-    | n <= 0 = MkListProof $ DefaultUniApply DefaultUniProtoList uni
-    | otherwise = case mkWitness (n - 1) of
-        MkListProof t -> MkListProof $ DefaultUniApply DefaultUniProtoList t
+    mkWitness :: Int -> ListProof
+    mkWitness n
+      | n <= 0 = MkListProof $ DefaultUniApply DefaultUniProtoList uni
+      | otherwise = case mkWitness (n - 1) of
+          MkListProof t -> MkListProof $ DefaultUniApply DefaultUniProtoList t
 
 selectNilName :: forall (a :: Type). DefaultUni (Esc a) -> Text
 selectNilName w = "selectNil[" <> T.pack (show w) <> "]"

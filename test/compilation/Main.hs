@@ -6,66 +6,66 @@
 
 module Main (main) where
 
-import Covenant.ASG (
-  ASG (ASG),
-  ASGBuilder,
-  CovenantError (TypeError),
-  Id,
-  Ref (AnArg, AnId),
-  app',
-  arg,
-  baseFunctorOf,
-  builtin2,
-  cata,
-  ctor,
-  ctor',
-  err,
-  lam,
-  lazyLam,
-  lit,
-  match,
-  runASGBuilder,
-  thunk,
- )
+import Covenant.ASG
+  ( ASG (ASG),
+    ASGBuilder,
+    CovenantError (TypeError),
+    Id,
+    Ref (AnArg, AnId),
+    app',
+    arg,
+    baseFunctorOf,
+    builtin2,
+    cata,
+    ctor,
+    ctor',
+    err,
+    lam,
+    lazyLam,
+    lit,
+    match,
+    runASGBuilder,
+    thunk,
+  )
 import Covenant.ArgDict (crudePrettyASG, ppASG)
 import Covenant.CodeGen (CodeGenError, compile, evalTerm)
-import Covenant.Constant (
-  AConstant (
-    ABoolean,
-    AByteString,
-    AnInteger
-  ),
- )
+import Covenant.Constant
+  ( AConstant
+      ( ABoolean,
+        AByteString,
+        AnInteger
+      ),
+  )
 import Covenant.DeBruijn (DeBruijn (Z))
 import Covenant.Index (count0, count1, ix0, ix1)
 import Covenant.JSON (CompilationUnit (CompilationUnit), Version (Version))
 import Covenant.Plutus (prettyPTerm)
 import Covenant.Prim (TwoArgFunc (AddInteger))
 import Covenant.Test (ledgerTypes, list, unsafeMkDatatypeInfos)
-import Covenant.Type (
-  AbstractTy,
-  BuiltinFlatT (
-    BoolT,
-    IntegerT
-  ),
-  CompT (Comp0, Comp1),
-  CompTBody (ReturnT, (:--:>)),
-  Constructor (Constructor),
-  ConstructorName,
-  DataDeclaration (DataDeclaration),
-  DataEncoding (PlutusData, SOP),
-  PlutusDataStrategy (
-    ConstrData,
-    EnumData,
-    NewtypeData,
-    ProductListData
-  ),
-  TyName,
-  ValT (BuiltinFlat, Datatype),
-  boolT,
-  integerT,
-  tyvar,
- )
+import Covenant.Type
+  ( AbstractTy,
+    BuiltinFlatT
+      ( BoolT,
+        IntegerT
+      ),
+    CompT (Comp0, Comp1),
+    CompTBody (ReturnT, (:--:>)),
+    Constructor (Constructor),
+    ConstructorName,
+    DataDeclaration (DataDeclaration),
+    DataEncoding (PlutusData, SOP),
+    PlutusDataStrategy
+      ( ConstrData,
+        EnumData,
+        NewtypeData,
+        ProductListData
+      ),
+    TyName,
+    ValT (BuiltinFlat, Datatype),
+    boolT,
+    integerT,
+    tyvar,
+  )
 import Data.Bimap (toMap)
 import Data.Kind (Type)
 import Data.List (find)
@@ -115,13 +115,13 @@ main =
       , goTest "elim_map_1" matchMapEmpty
       , goTest "elim_map_2" matchMapNonEmpty
       ]
- where
-  goTest ::
-    forall (a :: Type).
-    String -> ASGBuilder a -> TestTree
-  goTest nm = shouldCompile nm testCxt
-  testCxt :: Vector (DataDeclaration AbstractTy)
-  testCxt = [dataT, list, pairT, mapT, pairT]
+  where
+    goTest ::
+      forall (a :: Type).
+      String -> ASGBuilder a -> TestTree
+    goTest nm = shouldCompile nm testCxt
+    testCxt :: Vector (DataDeclaration AbstractTy)
+    testCxt = [dataT, list, pairT, mapT, pairT]
 
 {-
     ******************

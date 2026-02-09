@@ -1,45 +1,45 @@
-module Covenant.Transform.Pipeline.Monad (
-  PassM,
-  CodeGen,
-  runCodeGen,
-  ASTRef (..),
-  Datatypes (..),
-  RepPolyHandlers (..),
-  runPass,
-  runPassNoErrors,
-  selectHandlerId,
-  noteNilFixer,
-  initRepPolyHandlers,
-)
+module Covenant.Transform.Pipeline.Monad
+  ( PassM,
+    CodeGen,
+    runCodeGen,
+    ASTRef (..),
+    Datatypes (..),
+    RepPolyHandlers (..),
+    runPass,
+    runPassNoErrors,
+    selectHandlerId,
+    noteNilFixer,
+    initRepPolyHandlers,
+  )
 where
 
 import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT)
 import Control.Monad.RWS.Strict (MonadReader, RWST, runRWST)
-import Control.Monad.State.Strict (
-  MonadState (get),
-  State,
-  evalState,
-  modify',
- )
-import Covenant.CodeGen.Stubs (
-  HandlerType (Embed, Proj),
-  HasStubError,
-  MonadStub,
-  StubError,
-  StubM,
-  compileStubM,
-  defStubs,
-  stubId,
-  trySelectHandler,
- )
+import Control.Monad.State.Strict
+  ( MonadState (get),
+    State,
+    evalState,
+    modify',
+  )
+import Covenant.CodeGen.Stubs
+  ( HandlerType (Embed, Proj),
+    HasStubError,
+    MonadStub,
+    StubError,
+    StubM,
+    compileStubM,
+    defStubs,
+    stubId,
+    trySelectHandler,
+  )
 import Covenant.Data (DatatypeInfo)
-import Covenant.ExtendedASG (
-  ExtendedASG,
-  MonadASG,
-  embeddingId,
-  forgetExtendedId,
-  projectionId,
- )
+import Covenant.ExtendedASG
+  ( ExtendedASG,
+    MonadASG,
+    embeddingId,
+    forgetExtendedId,
+    projectionId,
+  )
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)

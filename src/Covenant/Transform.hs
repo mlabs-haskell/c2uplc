@@ -4,11 +4,11 @@
 module Covenant.Transform (transformASG) where
 
 import Covenant.ExtendedASG (MonadASG (getASG))
-import Covenant.Transform.Pipeline.Common (
-  CodeGenData,
-  ConcretifyCxt,
-  TransformState,
- )
+import Covenant.Transform.Pipeline.Common
+  ( CodeGenData,
+    ConcretifyCxt,
+    TransformState,
+  )
 import Covenant.Transform.Pipeline.ElimTyFixers (transformTypeFixerNodes)
 import Covenant.Transform.Pipeline.FirstPass (firstPass)
 import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)

@@ -1,21 +1,21 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
 
-module Covenant.Transform.TyUtils (
-  AppId (..),
-  LambdaId (..),
-  countToTyVars,
-  countToAbstractions,
-  idToName,
-  applyArgs,
-  substCompT,
-  runSubst,
-  isConcrete,
-  getInstantiations,
-  collectRigids,
-  cleanup,
-  assertConcrete,
-)
+module Covenant.Transform.TyUtils
+  ( AppId (..),
+    LambdaId (..),
+    countToTyVars,
+    countToAbstractions,
+    idToName,
+    applyArgs,
+    substCompT,
+    runSubst,
+    isConcrete,
+    getInstantiations,
+    collectRigids,
+    cleanup,
+    assertConcrete,
+  )
 where
 
 import Control.Applicative (Alternative ((<|>)))
@@ -25,12 +25,12 @@ import Covenant.ASG (Id)
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
 import Covenant.Index (Count, intCount, intIndex)
 import Covenant.Test (Id (UnsafeMkId))
-import Covenant.Type (
-  AbstractTy (BoundAt),
-  CompT (CompN),
-  CompTBody (ArgsAndResult, ReturnT),
-  ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
- )
+import Covenant.Type
+  ( AbstractTy (BoundAt),
+    CompT (CompN),
+    CompTBody (ArgsAndResult, ReturnT),
+    ValT (Abstraction, BuiltinFlat, Datatype, ThunkT),
+  )
 import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
@@ -97,15 +97,15 @@ collectRigids =
     . Vector.toList
     . fmap (flip runReader 0 . go)
     . compTArgSchema
- where
-  go :: ValT AbstractTy -> Reader Int (Set AbstractTy)
-  go = \case
-    Abstraction x -> S.singleton <$> resolveVar x
-    ThunkT compT -> local (+ 1) $ do
-      let argSchema = compTArgSchema compT
-      mconcat <$> traverse go (Vector.toList argSchema)
-    BuiltinFlat{} -> pure S.empty
-    Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
+  where
+    go :: ValT AbstractTy -> Reader Int (Set AbstractTy)
+    go = \case
+      Abstraction x -> S.singleton <$> resolveVar x
+      ThunkT compT -> local (+ 1) $ do
+        let argSchema = compTArgSchema compT
+        mconcat <$> traverse go (Vector.toList argSchema)
+      BuiltinFlat{} -> pure S.empty
+      Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
 
 {- This is a kind of improvised unification where we know that one side is necessarily more polymorphic than the other
    (and that the other can only contain rigid type variables or concrete types).
@@ -115,65 +115,65 @@ applyArgs compT [] = compT
 -- I *think* we ignore the result when determining the substitutions and then substitute into it to reconstruct
 -- the type.
 applyArgs polyFun@(CompN cnt (ArgsAndResult fnSigArgs _)) args = cleanup concreteFn
- where
-  vars :: [AbstractTy]
-  vars = Vector.toList $ countToAbstractions cnt
+  where
+    vars :: [AbstractTy]
+    vars = Vector.toList $ countToAbstractions cnt
 
-  instantiations :: Map AbstractTy (ValT AbstractTy)
-  instantiations =
-    flip runReader 0 $
-      getInstantiations vars (Vector.toList fnSigArgs) args
+    instantiations :: Map AbstractTy (ValT AbstractTy)
+    instantiations =
+      flip runReader 0 $
+        getInstantiations vars (Vector.toList fnSigArgs) args
 
-  concreteFn :: CompT AbstractTy
-  concreteFn = substCompT id instantiations polyFun
+    concreteFn :: CompT AbstractTy
+    concreteFn = substCompT id instantiations polyFun
 
 {- Our analogue of 'fixUp' from the unification module, but done without renaming (b/c we can't rename here, really) -}
 cleanup :: CompT AbstractTy -> CompT AbstractTy
 cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id substitutions origFn of
   CompN _ body -> CompN newCount body
- where
-  newCount :: Count "tyvar"
-  newCount = fromJust . preview intCount $ Vector.length remainingLocalVars
+  where
+    newCount :: Count "tyvar"
+    newCount = fromJust . preview intCount $ Vector.length remainingLocalVars
 
-  fnSig :: Vector (ValT AbstractTy)
-  fnSig = Vector.snoc args result
+    fnSig :: Vector (ValT AbstractTy)
+    fnSig = Vector.snoc args result
 
-  allOriginalVars :: Set AbstractTy
-  allOriginalVars = Set.fromList . Vector.toList $ countToAbstractions cnt
+    allOriginalVars :: Set AbstractTy
+    allOriginalVars = Set.fromList . Vector.toList $ countToAbstractions cnt
 
-  substitutions :: Map AbstractTy (ValT AbstractTy)
-  substitutions =
-    Vector.ifoldl'
-      ( \acc newIx oldTV ->
-          let tvIx = fromJust $ preview intIndex newIx
-              newTv = Abstraction (BoundAt Z tvIx)
-           in M.insert oldTV newTv acc
-      )
-      M.empty
-      remainingLocalVars
+    substitutions :: Map AbstractTy (ValT AbstractTy)
+    substitutions =
+      Vector.ifoldl'
+        ( \acc newIx oldTV ->
+            let tvIx = fromJust $ preview intIndex newIx
+                newTv = Abstraction (BoundAt Z tvIx)
+             in M.insert oldTV newTv acc
+        )
+        M.empty
+        remainingLocalVars
 
-  remainingLocalVars :: Vector AbstractTy
-  remainingLocalVars =
-    Vector.fromList
-      . Set.toList
-      . Set.unions
-      . flip runReader 0
-      . traverse collectLocalVars
-      . Vector.toList
-      $ fnSig
+    remainingLocalVars :: Vector AbstractTy
+    remainingLocalVars =
+      Vector.fromList
+        . Set.toList
+        . Set.unions
+        . flip runReader 0
+        . traverse collectLocalVars
+        . Vector.toList
+        $ fnSig
 
-  collectLocalVars :: ValT AbstractTy -> Reader Int (Set AbstractTy)
-  collectLocalVars = \case
-    Abstraction a -> do
-      resolved <- resolveVar a
-      if resolved `Set.member` allOriginalVars
-        then pure $ Set.singleton a
-        else pure Set.empty
-    BuiltinFlat{} -> pure Set.empty
-    ThunkT (CompN _ (ArgsAndResult thunkArgs thunkRes)) -> local (+ 1) $ do
-      let toTraverse = Vector.toList $ Vector.snoc thunkArgs thunkRes
-      Set.unions <$> traverse collectLocalVars toTraverse
-    Datatype _ dtArgs -> Set.unions <$> traverse collectLocalVars (Vector.toList dtArgs)
+    collectLocalVars :: ValT AbstractTy -> Reader Int (Set AbstractTy)
+    collectLocalVars = \case
+      Abstraction a -> do
+        resolved <- resolveVar a
+        if resolved `Set.member` allOriginalVars
+          then pure $ Set.singleton a
+          else pure Set.empty
+      BuiltinFlat{} -> pure Set.empty
+      ThunkT (CompN _ (ArgsAndResult thunkArgs thunkRes)) -> local (+ 1) $ do
+        let toTraverse = Vector.toList $ Vector.snoc thunkArgs thunkRes
+        Set.unions <$> traverse collectLocalVars toTraverse
+      Datatype _ dtArgs -> Set.unions <$> traverse collectLocalVars (Vector.toList dtArgs)
 
 substCompT ::
   forall (a :: Type).
@@ -182,8 +182,8 @@ substCompT ::
   CompT AbstractTy ->
   CompT AbstractTy
 substCompT f dict (CompN cnt (compTBodyToVec -> bodyVec)) = CompN cnt (vecToCompTBody subbed) -- NOTE: COUNT WILL BE WRONG (I don't think it matters)
- where
-  subbed = (\vt -> runReader (substitute f dict vt) 0) <$> bodyVec
+  where
+    subbed = (\vt -> runReader (substitute f dict vt) 0) <$> bodyVec
 
 -- the extra function arg lets this work with either AbstractTy or Void (which might be useful for us)
 substitute ::
@@ -208,23 +208,23 @@ countToTyVars :: Count "tyvar" -> Vector (ValT AbstractTy)
 countToTyVars cnt
   | cntI == 0 = mempty
   | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
- where
-  cntI :: Int
-  cntI = review intCount cnt
+  where
+    cntI :: Int
+    cntI = review intCount cnt
 
-  mkTV :: Int -> ValT AbstractTy
-  mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
+    mkTV :: Int -> ValT AbstractTy
+    mkTV = Abstraction . BoundAt Z . fromJust . preview intIndex
 
 countToAbstractions :: Count "tyvar" -> Vector AbstractTy
 countToAbstractions cnt
   | cntI == 0 = mempty
   | otherwise = mkTV <$> Vector.fromList [0 .. (cntI - 1)]
- where
-  cntI :: Int
-  cntI = review intCount cnt
+  where
+    cntI :: Int
+    cntI = review intCount cnt
 
-  mkTV :: Int -> AbstractTy
-  mkTV = BoundAt Z . fromJust . preview intIndex
+    mkTV :: Int -> AbstractTy
+    mkTV = BoundAt Z . fromJust . preview intIndex
 
 -- Given a list of variables, one list of types representing the function type (minus the result, we don't care about it i think),
 -- and a second list of types representing the arguments to which it is applied, determine all the instantiations
@@ -255,18 +255,18 @@ instantiates var concrete abstract = case (concrete, abstract) of
   (Datatype tnC argsC, Datatype tnA argsA)
     | tnC == tnA -> go (Vector.toList argsC) (Vector.toList argsA)
   _ -> pure Nothing
- where
-  -- second arg gets adjusted here, not first
-  -- I THINK we need to do this?
-  sameVar :: AbstractTy -> AbstractTy -> Reader Int Bool
-  sameVar varA varB = do
-    varB' <- resolveVar varB
-    pure $ varA == varB'
+  where
+    -- second arg gets adjusted here, not first
+    -- I THINK we need to do this?
+    sameVar :: AbstractTy -> AbstractTy -> Reader Int Bool
+    sameVar varA varB = do
+      varB' <- resolveVar varB
+      pure $ varA == varB'
 
-  go :: [ValT AbstractTy] -> [ValT AbstractTy] -> Reader Int (Maybe (ValT AbstractTy))
-  go [] _ = pure Nothing
-  go _ [] = pure Nothing
-  go (c : cs) (a : as) = (<|>) <$> instantiates var c a <*> go cs as
+    go :: [ValT AbstractTy] -> [ValT AbstractTy] -> Reader Int (Maybe (ValT AbstractTy))
+    go [] _ = pure Nothing
+    go _ [] = pure Nothing
+    go (c : cs) (a : as) = (<|>) <$> instantiates var c a <*> go cs as
 
 resolveVar :: AbstractTy -> Reader Int AbstractTy
 resolveVar (BoundAt db ix) = do
