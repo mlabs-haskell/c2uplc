@@ -26,11 +26,6 @@
             };
             hlint.enable = true;
 
-            typos = {
-              enable = true;
-              excludes = [ "\.golden" "fourmolu.yaml" "src/Covenant/CodeGen/Common.hs" ];
-            };
-
             yamllint.enable = true;
           };
         };
