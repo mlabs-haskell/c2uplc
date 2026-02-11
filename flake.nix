@@ -1,13 +1,7 @@
 {
   description = "c2uplc";
 
-  nixConfig = {
-    allow-import-from-derivation = "true";
-    bash-prompt = "\\[\\e[0m\\][\\[\\e[0;2m\\]nix \\[\\e[0;1m\\]c2uplc \\[\\e[0;93m\\]\\w\\[\\e[0m\\]]\\[\\e[0m\\]$ \\[\\e[0m\\]";
-    cores = "1";
-    max-jobs = "auto";
-    auto-optimise-store = "true";
-  };
+  nixConfig.allow-import-from-derivation = "true";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
@@ -30,30 +24,27 @@
 
   outputs = inputs@{ flake-parts, haskell-nix, iohk-nix, CHaP, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" "aarch64-darwin" "x86_64-darwin" "aarch64-linux" ];
+
       imports = [
         ./nix/pre-commit.nix
         ./nix/hercules-ci.nix
       ];
-      debug = true;
-      systems = [ "x86_64-linux" "aarch64-darwin" "x86_64-darwin" "aarch64-linux" ];
 
-      perSystem = { config, system, ... }:
+      perSystem = { config, pkgs, system, ... }:
         let
-          pkgs =
-            import haskell-nix.inputs.nixpkgs {
-              inherit system;
-              overlays = [
-                haskell-nix.overlay
-                iohk-nix.overlays.crypto
-                iohk-nix.overlays.haskell-nix-crypto
-              ];
-              inherit (haskell-nix) config;
-            };
-
           project = pkgs.haskell-nix.cabalProject' {
-            src = ./.;
+            src = pkgs.lib.cleanSourceWith {
+              src = pkgs.lib.cleanSource ./.;
+              filter = path: _:
+                let
+                  baseName = baseNameOf path;
+                  relPath = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+                in
+                pkgs.lib.any (p: pkgs.lib.hasPrefix p relPath) [ "src" "app" "test" ]
+                || builtins.elem baseName [ "c2uplc.cabal" "cabal.project" "CHANGELOG.md" "README.md" "LICENSE" ];
+            };
             compiler-nix-name = "ghc984";
-            # NOTE(bladyjoker): Follow https://github.com/input-output-hk/plutus/blob/master/cabal.project
             index-state = "2025-07-30T14:13:57Z";
             inputMap = {
               "https://chap.intersectmbo.org/" = CHaP;
@@ -62,7 +53,6 @@
               withHoogle = true;
               withHaddock = true;
               exactDeps = false;
-              # TODO(peter-mlabs): Use `apply-refact` for repo wide refactoring `find -name '*.hs' -not -path './dist-*/*' -exec hlint -j --refactor --refactor-options="--inplace" {} +``
               shellHook = config.pre-commit.installationScript;
               tools = {
                 cabal = { };
@@ -78,10 +68,18 @@
           flake = project.flake { };
         in
         {
-          inherit (flake) devShells;
-          packages = flake.packages;
+          _module.args.pkgs =
+            import haskell-nix.inputs.nixpkgs {
+              inherit system;
+              overlays = [
+                haskell-nix.overlay
+                iohk-nix.overlays.crypto
+                iohk-nix.overlays.haskell-nix-crypto
+              ];
+              inherit (haskell-nix) config;
+            };
 
-          inherit (flake) checks;
+          inherit (flake) packages checks devShells;
         };
     };
 }
