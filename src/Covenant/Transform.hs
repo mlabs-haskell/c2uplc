@@ -4,11 +4,11 @@
 module Covenant.Transform (transformASG) where
 
 import Covenant.ExtendedASG (MonadASG (getASG))
-import Covenant.Transform.Pipeline.Common
-  ( CodeGenData,
+import Covenant.Transform.Pipeline.Common (
+    CodeGenData,
     ConcretifyCxt,
     TransformState,
-  )
+ )
 import Covenant.Transform.Pipeline.ElimTyFixers (transformTypeFixerNodes)
 import Covenant.Transform.Pipeline.FirstPass (firstPass)
 import Covenant.Transform.Pipeline.MkTyFixerFnData (mkTypeFixerFnData)
@@ -22,27 +22,27 @@ import Data.Vector qualified as Vector
 
 transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
 transformASG dtDict = do
-  (tyFixerData, repPolyHandlers) <- runPassNoErrors dtDict initRepPolyHandlers $ do
-    firstPass
-    mkTypeFixerFnData
-  _ <- getASG
-  let transformState :: Rec TransformState
-      transformState =
-        #visited .== S.empty
-          .+ #tyFixerData .== tyFixerData
-          .+ #tyFixers .== M.empty
+    (tyFixerData, repPolyHandlers) <- runPassNoErrors dtDict initRepPolyHandlers $ do
+        firstPass
+        mkTypeFixerFnData
+    _ <- getASG
+    let transformState :: Rec TransformState
+        transformState =
+            #visited .== S.empty
+                .+ #tyFixerData .== tyFixerData
+                .+ #tyFixers .== M.empty
 
-  asgBundle1 <- snd <$> runPassNoErrors dtDict transformState transformTypeFixerNodes
-  let initConcretifyCxt :: Rec ConcretifyCxt
-      initConcretifyCxt =
-        #context .== M.empty
-          .+ #callPath .== Vector.empty
-          .+ #appPath .== Vector.empty
-          .+ #tyFixers .== (asgBundle1 R..! #tyFixers)
-          .+ #datatypes .== dtDict
-  finalRepHandlers <- snd <$> runPassNoErrors initConcretifyCxt repPolyHandlers resolveRepPoly
-  let codeGenData =
-        #tyFixerData .== tyFixerData
-          .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
-          .+ #repPolyHandlers .== finalRepHandlers
-  pure codeGenData
+    asgBundle1 <- snd <$> runPassNoErrors dtDict transformState transformTypeFixerNodes
+    let initConcretifyCxt :: Rec ConcretifyCxt
+        initConcretifyCxt =
+            #context .== M.empty
+                .+ #callPath .== Vector.empty
+                .+ #appPath .== Vector.empty
+                .+ #tyFixers .== (asgBundle1 R..! #tyFixers)
+                .+ #datatypes .== dtDict
+    finalRepHandlers <- snd <$> runPassNoErrors initConcretifyCxt repPolyHandlers resolveRepPoly
+    let codeGenData =
+            #tyFixerData .== tyFixerData
+                .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
+                .+ #repPolyHandlers .== finalRepHandlers
+    pure codeGenData

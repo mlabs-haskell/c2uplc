@@ -1,5 +1,5 @@
-module Covenant.Transform.Pipeline.Monad
-  ( PassM,
+module Covenant.Transform.Pipeline.Monad (
+    PassM,
     CodeGen,
     runCodeGen,
     ASTRef (..),
@@ -10,19 +10,19 @@ module Covenant.Transform.Pipeline.Monad
     selectHandlerId,
     noteNilFixer,
     initRepPolyHandlers,
-  )
+)
 where
 
 import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT)
 import Control.Monad.RWS.Strict (MonadReader, RWST, runRWST)
-import Control.Monad.State.Strict
-  ( MonadState (get),
+import Control.Monad.State.Strict (
+    MonadState (get),
     State,
     evalState,
     modify',
-  )
-import Covenant.CodeGen.Stubs
-  ( HandlerType (Embed, Proj),
+ )
+import Covenant.CodeGen.Stubs (
+    HandlerType (Embed, Proj),
     HasStubError,
     MonadStub,
     StubError,
@@ -31,15 +31,15 @@ import Covenant.CodeGen.Stubs
     defStubs,
     stubId,
     trySelectHandler,
-  )
+ )
 import Covenant.Data (DatatypeInfo)
-import Covenant.ExtendedASG
-  ( ExtendedASG,
+import Covenant.ExtendedASG (
+    ExtendedASG,
     MonadASG,
     embeddingId,
     forgetExtendedId,
     projectionId,
-  )
+ )
 import Covenant.Test (Id)
 import Covenant.Type (AbstractTy, TyName, ValT)
 import Data.Kind (Type)
@@ -91,58 +91,58 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 -}
 
 newtype CodeGen a = CodeGen (StubM (State ExtendedASG) a)
-  deriving
-    ( Functor
-    , Applicative
-    , Monad
-    , MonadASG
-    , MonadStub
-    , HasStubError
-    )
-    via (StubM (State ExtendedASG))
+    deriving
+        ( Functor
+        , Applicative
+        , Monad
+        , MonadASG
+        , MonadStub
+        , HasStubError
+        )
+        via (StubM (State ExtendedASG))
 
 runCodeGen ::
-  ExtendedASG ->
-  CodeGen (Term Name DefaultUni DefaultFun ()) ->
-  Either StubError (Term Name DefaultUni DefaultFun ())
+    ExtendedASG ->
+    CodeGen (Term Name DefaultUni DefaultFun ()) ->
+    Either StubError (Term Name DefaultUni DefaultFun ())
 runCodeGen e (CodeGen act) = evalState (compileStubM defStubs act) e
 
 newtype PassM e r s a = PassM (ExceptT e (RWST r () s CodeGen) a)
-  deriving
-    ( Functor
-    , Applicative
-    , Monad
-    , MonadASG
-    , MonadStub
-    , MonadReader r
-    , MonadState s
-    , HasStubError
-    , MonadError e
-    )
-    via (ExceptT e (RWST r () s CodeGen))
+    deriving
+        ( Functor
+        , Applicative
+        , Monad
+        , MonadASG
+        , MonadStub
+        , MonadReader r
+        , MonadState s
+        , HasStubError
+        , MonadError e
+        )
+        via (ExceptT e (RWST r () s CodeGen))
 
 runPass ::
-  forall (e :: Type) (r :: Type) (s :: Type) (a :: Type).
-  r ->
-  s ->
-  PassM e r s a ->
-  CodeGen (Either e (a, s))
+    forall (e :: Type) (r :: Type) (s :: Type) (a :: Type).
+    r ->
+    s ->
+    PassM e r s a ->
+    CodeGen (Either e (a, s))
 runPass r s (PassM act) = do
-  runRWST (runExceptT act) r s >>= \case
-    (res, st, _) -> case res of
-      Left e -> pure $ Left e
-      Right x -> pure $ Right (x, st)
+    runRWST (runExceptT act) r s >>= \case
+        (res, st, _) -> case res of
+            Left e -> pure $ Left e
+            Right x -> pure $ Right (x, st)
 
 runPassNoErrors ::
-  forall (r :: Type) (s :: Type) (a :: Type).
-  r ->
-  s ->
-  PassM Void r s a ->
-  CodeGen (a, s)
+    forall (r :: Type) (s :: Type) (a :: Type).
+    r ->
+    s ->
+    PassM Void r s a ->
+    CodeGen (a, s)
 runPassNoErrors r s act =
-  runPass r s act >>= \case
-    Left err -> absurd err
-    Right res -> pure res
+    runPass r s act >>= \case
+        Left err -> absurd err
+        Right res -> pure res
 
 -- This is a form of absolute reference for use in the final two passes.
 -- ATM it is only used for generated the correct Nil but it could be useful for other
@@ -151,17 +151,17 @@ runPassNoErrors r s act =
 -- This is, properly, a reference into a Tree that we have yet to construct from our graph,
 -- the name is intentional.
 data ASTRef = ASTRef {underLams :: Vector Id, underApps :: Vector Id, appNodeId :: Id}
-  deriving stock (Show, Eq, Ord)
+    deriving stock (Show, Eq, Ord)
 
 data RepPolyHandlers
-  = RepPolyHandlers
-  { ixedById :: Map Id (Term Name DefaultUni DefaultFun (), HandlerType, ValT AbstractTy)
-  , ixedByType :: Map (ValT AbstractTy, HandlerType) Id
-  , -- This is stupid and shouldn't be here but it is kind of the only sensible place to put it
-    -- due to Nil being incredibly weird in how we have to handle it internally -_-
-    nilTyFixers :: Set ASTRef
-  }
-  deriving stock (Show, Eq)
+    = RepPolyHandlers
+    { ixedById :: Map Id (Term Name DefaultUni DefaultFun (), HandlerType, ValT AbstractTy)
+    , ixedByType :: Map (ValT AbstractTy, HandlerType) Id
+    , -- This is stupid and shouldn't be here but it is kind of the only sensible place to put it
+      -- due to Nil being incredibly weird in how we have to handle it internally -_-
+      nilTyFixers :: Set ASTRef
+    }
+    deriving stock (Show, Eq)
 
 initRepPolyHandlers :: RepPolyHandlers
 initRepPolyHandlers = RepPolyHandlers mempty mempty mempty
@@ -182,31 +182,31 @@ newtype Datatypes = Datatypes (Map TyName (DatatypeInfo AbstractTy))
    is that doing so would require more work (and no time).
 -}
 selectHandlerId ::
-  forall m.
-  (MonadStub m, MonadState RepPolyHandlers m) =>
-  Datatypes ->
-  HandlerType ->
-  ValT AbstractTy ->
-  m Id
+    forall m.
+    (MonadStub m, MonadState RepPolyHandlers m) =>
+    Datatypes ->
+    HandlerType ->
+    ValT AbstractTy ->
+    m Id
 selectHandlerId (Datatypes dtDict) htype valT = do
-  (RepPolyHandlers _ byType _) <- get
-  case M.lookup (valT, htype) byType of
-    Just i -> pure i
-    Nothing ->
-      trySelectHandler dtDict htype valT >>= \case
-        Nothing -> stubId "id"
-        Just aHandler -> do
-          eid <- case htype of
-            Proj -> projectionId
-            Embed -> embeddingId
-          let i = forgetExtendedId eid
-          let updF (RepPolyHandlers byId' byType' nilFixers) =
-                RepPolyHandlers
-                  (M.insert i (aHandler, htype, valT) byId')
-                  (M.insert (valT, htype) i byType')
-                  nilFixers
-          modify' updF
-          pure i
+    (RepPolyHandlers _ byType _) <- get
+    case M.lookup (valT, htype) byType of
+        Just i -> pure i
+        Nothing ->
+            trySelectHandler dtDict htype valT >>= \case
+                Nothing -> stubId "id"
+                Just aHandler -> do
+                    eid <- case htype of
+                        Proj -> projectionId
+                        Embed -> embeddingId
+                    let i = forgetExtendedId eid
+                    let updF (RepPolyHandlers byId' byType' nilFixers) =
+                            RepPolyHandlers
+                                (M.insert i (aHandler, htype, valT) byId')
+                                (M.insert (valT, htype) i byType')
+                                nilFixers
+                    modify' updF
+                    pure i
 
 {- This just notes that a given node is a type fixing node for Nil.
 
@@ -222,9 +222,9 @@ selectHandlerId (Datatypes dtDict) htype valT = do
    This is only for bookkeeping, it doesn't do anything interesting on its own.
 -}
 noteNilFixer ::
-  forall m.
-  (MonadStub m, MonadState RepPolyHandlers m) =>
-  ASTRef ->
-  m ()
+    forall m.
+    (MonadStub m, MonadState RepPolyHandlers m) =>
+    ASTRef ->
+    m ()
 noteNilFixer astRef = modify' $ \(RepPolyHandlers a b nilFixers) ->
-  RepPolyHandlers a b (S.insert astRef nilFixers)
+    RepPolyHandlers a b (S.insert astRef nilFixers)

@@ -7,37 +7,37 @@ module Covenant.Transform.Pipeline.FirstPass (firstPass) where
 
 import Control.Monad.RWS.Strict (MonadReader (ask), modify')
 import Covenant.ASG (ASGNode (AnError))
-import Covenant.CodeGen.Stubs
-  ( HandlerType (Embed, Proj),
+import Covenant.CodeGen.Stubs (
+    HandlerType (Embed, Proj),
     stubId,
     trySelectHandler,
-  )
+ )
 import Covenant.DeBruijn (DeBruijn (Z))
-import Covenant.ExtendedASG
-  ( ExtendedId (EphemeralError, IdentityFn),
+import Covenant.ExtendedASG (
+    ExtendedId (EphemeralError, IdentityFn),
     eInsert,
     embeddingId,
     forgetExtendedId,
     projectionId,
-  )
+ )
 import Covenant.Index (ix0)
-import Covenant.Transform.Pipeline.Common
-  ( UniqueError (UniqueError),
+import Covenant.Transform.Pipeline.Common (
+    UniqueError (UniqueError),
     syntheticLamNode,
-  )
-import Covenant.Transform.Pipeline.Monad
-  ( Datatypes (Datatypes),
+ )
+import Covenant.Transform.Pipeline.Monad (
+    Datatypes (Datatypes),
     PassM,
     RepPolyHandlers (RepPolyHandlers),
-  )
-import Covenant.Type
-  ( AbstractTy,
+ )
+import Covenant.Type (
+    AbstractTy,
     BuiltinFlatT (BLS12_381_G1_ElementT, BLS12_381_G2_ElementT, BoolT, ByteStringT, IntegerT, StringT, UnitT),
     CompT (Comp0, Comp1),
     CompTBody (ReturnT, (:--:>)),
     ValT (BuiltinFlat),
     tyvar,
-  )
+ )
 import Data.Map qualified as M
 import Data.Void (Void)
 
@@ -52,14 +52,14 @@ import Data.Void (Void)
 
 firstPass :: PassM Void Datatypes RepPolyHandlers ()
 firstPass = do
-  uniqueErrorId <- stubId "error"
-  let eid = EphemeralError uniqueErrorId
-  eInsert eid AnError
-  identityStubId <- stubId "id"
-  let idNode = syntheticLamNode (UniqueError uniqueErrorId) (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0))
-  eInsert (IdentityFn identityStubId) idNode
-  mapM_ (uncurry (bindPrimStub eid)) ((Proj,) <$> primTypes)
-  mapM_ (uncurry (bindPrimStub eid)) ((Embed,) <$> primTypes)
+    uniqueErrorId <- stubId "error"
+    let eid = EphemeralError uniqueErrorId
+    eInsert eid AnError
+    identityStubId <- stubId "id"
+    let idNode = syntheticLamNode (UniqueError uniqueErrorId) (Comp1 $ tyvar Z ix0 :--:> ReturnT (tyvar Z ix0))
+    eInsert (IdentityFn identityStubId) idNode
+    mapM_ (uncurry (bindPrimStub eid)) ((Proj,) <$> primTypes)
+    mapM_ (uncurry (bindPrimStub eid)) ((Embed,) <$> primTypes)
   where
     primTypes :: [ValT AbstractTy]
     primTypes = [intT, boolT, stringT, byteStringT, unitT, blsG1T, blsG2T]
@@ -75,18 +75,18 @@ firstPass = do
 
     bindPrimStub :: ExtendedId -> HandlerType -> ValT AbstractTy -> PassM Void Datatypes RepPolyHandlers ()
     bindPrimStub errId htype ty =
-      ask >>= \(Datatypes dtDict) ->
-        trySelectHandler dtDict htype ty >>= \case
-          Nothing -> error $ "Error in First Pass: Could not locate a " <> show htype <> " handler for " <> show ty
-          Just handlerTerm -> do
-            let fnTy = Comp0 $ ty :--:> ReturnT ty
-                synthNode = syntheticLamNode (UniqueError . forgetExtendedId $ errId) fnTy
-            fnId <- case htype of
-              Proj -> projectionId
-              Embed -> embeddingId
-            modify' $ \(RepPolyHandlers byId byTy nilFixers) ->
-              RepPolyHandlers
-                (M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) byId)
-                (M.insert (ty, htype) (forgetExtendedId fnId) byTy)
-                nilFixers
-            eInsert fnId synthNode
+        ask >>= \(Datatypes dtDict) ->
+            trySelectHandler dtDict htype ty >>= \case
+                Nothing -> error $ "Error in First Pass: Could not locate a " <> show htype <> " handler for " <> show ty
+                Just handlerTerm -> do
+                    let fnTy = Comp0 $ ty :--:> ReturnT ty
+                        synthNode = syntheticLamNode (UniqueError . forgetExtendedId $ errId) fnTy
+                    fnId <- case htype of
+                        Proj -> projectionId
+                        Embed -> embeddingId
+                    modify' $ \(RepPolyHandlers byId byTy nilFixers) ->
+                        RepPolyHandlers
+                            (M.insert (forgetExtendedId fnId) (handlerTerm, htype, ty) byId)
+                            (M.insert (ty, htype) (forgetExtendedId fnId) byTy)
+                            nilFixers
+                    eInsert fnId synthNode
