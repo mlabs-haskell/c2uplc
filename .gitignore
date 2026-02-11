@@ -169,3 +169,4 @@ test/js.done
 testing
 
 .direnv
+.pre-commit-config.yaml
