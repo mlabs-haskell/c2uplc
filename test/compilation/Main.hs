@@ -1,10 +1,8 @@
 {-# LANGUAGE OverloadedLists #-}
--- TODO: Once tests are wired up, this should be removed
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 {- HLINT ignore "Use camelCase" -}
 
-module Main (main) where
+module Main (main, testCompileIO) where
 
 import Covenant.ASG
   ( ASG (ASG),
@@ -99,6 +97,7 @@ main =
         goTest "nil_concrete" mkNilConcrete
       , goTest "cons_concrete" mkConsConcrete
       , goTest "match_list_empty" matchListEmpty
+      , goTest "match_list_non_empty" matchListNonEmpty
       , goTest "list_cata" cataList
       , -- pair
         goTest "intro_pair" mkPair
@@ -283,8 +282,9 @@ abcT =
     ]
     (PlutusData EnumData)
 
-myListT :: DataEncoding -> DataDeclaration AbstractTy
-myListT =
+-- TODO no time to set these up as real tests but should do so as soon as time/budget becomes available
+_myListT :: DataEncoding -> DataDeclaration AbstractTy
+_myListT =
   DataDeclaration
     "MyList"
     count1
@@ -292,11 +292,11 @@ myListT =
     , Constructor "MyCons" [tyvar Z ix0, Datatype "MyList" [tyvar Z ix0]]
     ]
 
-myListSOP :: DataDeclaration AbstractTy
-myListSOP = myListT SOP
+_myListSOP :: DataDeclaration AbstractTy
+_myListSOP = _myListT SOP
 
-myListData :: DataDeclaration AbstractTy
-myListData = myListT (PlutusData Covenant.Type.ConstrData)
+_myListData :: DataDeclaration AbstractTy
+_myListData = _myListT (PlutusData Covenant.Type.ConstrData)
 
 -- Simple product type
 productT :: DataEncoding -> DataDeclaration AbstractTy
@@ -409,8 +409,8 @@ elimNewtype = testLam (BuiltinFlat IntegerT) $ do
   AnId <$> match myNT [AnId idF]
 
 -- User defined recursive type
-myListInts :: ASGBuilder Id
-myListInts = testLam (Datatype "MyList" [BuiltinFlat IntegerT]) $ do
+_myListInts :: ASGBuilder Id
+_myListInts = testLam (Datatype "MyList" [BuiltinFlat IntegerT]) $ do
   (one, two, three) <- (,,) <$> lit (AnInteger 1) <*> lit (AnInteger 2) <*> lit (AnInteger 3)
   AnId <$> mkListLike (BuiltinFlat IntegerT) "MyList" "MyCons" "MyNil" [AnId one, AnId two, AnId three]
 
