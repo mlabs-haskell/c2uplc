@@ -9,35 +9,35 @@
 module Main (main) where
 
 import Covenant.CodeGen (evalTerm)
-import Covenant.CodeGen.Stubs (
-    StubM,
+import Covenant.CodeGen.Stubs
+  ( StubM,
     compileStub',
     defStubs,
     pInt,
     resolveStub,
- )
+  )
 import Covenant.Data (DatatypeInfo)
 import Covenant.ExtendedASG (MonadASG)
-import Covenant.Plutus (
-    pBuiltin,
+import Covenant.Plutus
+  ( pBuiltin,
     prettyPTerm,
     (#),
     (#-),
- )
+  )
 import Covenant.Prim (OneArgFunc (IData, UnIData))
-import Covenant.Test (list, unsafeMkDatatypeInfos)
-import Covenant.Transform.Common (
-    pFreshLam,
+import Covenant.Transform.Common
+  ( pFreshLam,
     pFreshLam',
     pFreshLam2',
     pFreshLam3',
- )
-import Covenant.Type (
-    AbstractTy,
+  )
+import Covenant.Type
+  ( AbstractTy,
     BuiltinFlatT (IntegerT),
     TyName,
     ValT (BuiltinFlat, Datatype),
- )
+  )
+import Covenant.Unsafe (list, unsafeMkDatatypeInfos)
 import Data.Map (Map)
 import PlutusCore.Data (Data (I, List))
 import PlutusCore.MkPlc (mkConstant)
@@ -84,9 +84,9 @@ projInt = pFreshLam' "x" $ \x -> pure $ pBuiltin UnIData # x
 
 elimListTest :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 elimListTest = do
-    elim <- resolveStub "elimList"
-    fCons <- pFreshLam2' "x" "xs" $ \x _xs -> pure x
-    pure $ elim # fCons # pInt 0 # depth0Ints
+  elim <- resolveStub "elimList"
+  fCons <- pFreshLam2' "x" "xs" $ \x _xs -> pure x
+  pure $ elim # fCons # pInt 0 # depth0Ints
 
 {-
 testProjList :: (MonadASG m) => ValT AbstractTy -> Term Name DefaultUni DefaultFun () -> StubM m Term Name DefaultUni DefaultFun ()
@@ -105,67 +105,67 @@ depth0Ints = mkConstant @[Integer] () [1, 2, 3, 4]
 -- FOR TESTING / INSPECTION ONLY
 embedListTest :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 embedListTest = do
-    emb <- resolveStub "embedList"
-    iDat <- pFreshLam $ \x -> pure $ pBuiltin IData # x
-    pure $ emb # pInt 0 # iDat # depth0Ints
+  emb <- resolveStub "embedList"
+  iDat <- pFreshLam $ \x -> pure $ pBuiltin IData # x
+  pure $ emb # pInt 0 # iDat # depth0Ints
 
 mapTest :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 mapTest = do
-    mkMap <- resolveStub "map"
-    let pmap = mkMap # mkConstant @[Integer] () []
-    subOne <- pFreshLam' "sub_x" $ \x -> pure $ x #- pInt 1
-    pure $ pmap # subOne # depth0Ints
+  mkMap <- resolveStub "map"
+  let pmap = mkMap # mkConstant @[Integer] () []
+  subOne <- pFreshLam' "sub_x" $ \x -> pure $ x #- pInt 1
+  pure $ pmap # subOne # depth0Ints
 
 recListTest :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 recListTest = do
-    -- ([Int] -> Int) -> Int -> [Int] -> Int
-    fCons <- pFreshLam3' "self" "x" "xs" $ \_ x _ -> pure x
-    fNil <- pFreshLam' "_xs" $ \_ -> pure (pInt 0)
-    recList' <- resolveStub "recList"
-    pure $ recList' # fCons # fNil # depth1Ints
+  -- ([Int] -> Int) -> Int -> [Int] -> Int
+  fCons <- pFreshLam3' "self" "x" "xs" $ \_ x _ -> pure x
+  fNil <- pFreshLam' "_xs" $ \_ -> pure (pInt 0)
+  recList' <- resolveStub "recList"
+  pure $ recList' # fCons # fNil # depth1Ints
 
 testEmbTrue :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 testEmbTrue = do
-    emb <- resolveStub "embedBool"
-    pure $ emb # mkConstant () True
+  emb <- resolveStub "embedBool"
+  pure $ emb # mkConstant () True
 
 -- Round trips
 testProjTrue :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 testProjTrue = do
-    emb <- resolveStub "embedBool"
-    let embedded = emb # mkConstant () True
-    proj <- resolveStub "projBool"
-    pure $ proj # embedded
+  emb <- resolveStub "embedBool"
+  let embedded = emb # mkConstant () True
+  proj <- resolveStub "projBool"
+  pure $ proj # embedded
 
 testEmbFalse :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 testEmbFalse = do
-    emb <- resolveStub "embedBool"
-    pure $ emb # mkConstant () False
+  emb <- resolveStub "embedBool"
+  pure $ emb # mkConstant () False
 
 -- Round trips
 testProjFalse :: (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
 testProjFalse = do
-    emb <- resolveStub "embedBool"
-    let embedded = emb # mkConstant () False
-    proj <- resolveStub "projBool"
-    pure $ proj # embedded
+  emb <- resolveStub "embedBool"
+  let embedded = emb # mkConstant () False
+  proj <- resolveStub "projBool"
+  pure $ proj # embedded
 
 runTest ::
-    (forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())) ->
-    IO ()
+  (forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())) ->
+  IO ()
 runTest stub' = case compileStub' stub of
-    Left stubErr -> print stubErr
-    Right hm -> do
-        putStrLn "Stub compilation success. Pretty unevaluated term:"
-        putStrLn ""
-        print $ prettyPTerm hm
-        putStrLn ""
-        putStrLn "Trying evaluation..."
-        case evalTerm hm of
-            Left evalErr -> putStrLn evalErr
-            Right res -> do
-                putStrLn "Success! Evaluation result: "
-                print (prettyPTerm res)
+  Left stubErr -> print stubErr
+  Right hm -> do
+    putStrLn "Stub compilation success. Pretty unevaluated term:"
+    putStrLn ""
+    print $ prettyPTerm hm
+    putStrLn ""
+    putStrLn "Trying evaluation..."
+    case evalTerm hm of
+      Left evalErr -> putStrLn evalErr
+      Right res -> do
+        putStrLn "Success! Evaluation result: "
+        print (prettyPTerm res)
   where
     stub :: forall m. (MonadASG m) => StubM m (Term Name DefaultUni DefaultFun ())
     stub = defStubs >> stub'
