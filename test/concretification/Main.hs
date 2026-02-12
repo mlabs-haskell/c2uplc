@@ -220,8 +220,7 @@ rigidBinderTest = lam rigidBinderTy $ do
   f <- lam (Comp0 $ intT :--:> ReturnT boolT) $ do
     justHandler <- lazyLam (Comp0 $ tyvar (S (S Z)) ix0 :--:> ReturnT boolT) $ do
       AnId <$> lit (ABoolean False)
-    nothingHandler <- lazyLam (Comp0 $ ReturnT boolT) $ do
-      AnId <$> lit (ABoolean False)
+    nothingHandler <- lit (ABoolean False)
     x <- AnArg <$> arg (S Z) ix0
     m <- ctor' "Maybe" "Just" [x]
     AnId <$> match (AnId m) [AnId justHandler, AnId nothingHandler]
