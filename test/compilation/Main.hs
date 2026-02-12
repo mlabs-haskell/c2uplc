@@ -223,7 +223,7 @@ mkASG ::
 mkASG dtDict builder = case runASGBuilder (unsafeMkDatatypeInfos $ V.toList dtDict) builder of
   Left err' -> Left err'
   Right (ASG asg) -> do
-    pure $ CompilationUnit dtDict asg (Version 0 0)
+    pure $ CompilationUnit dtDict (snd asg) (Version 0 0)
 
 -- obviously very unsafe and inefficient, but doesn't matter here
 ledgerType :: TyName -> DataDeclaration AbstractTy
