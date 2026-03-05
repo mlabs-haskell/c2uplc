@@ -3,34 +3,32 @@
     inputs.pre-commit-hooks.flakeModule
   ];
 
-  perSystem = {
-    pre-commit = {
-      settings = {
-        src = ./.;
+  perSystem = { config, ... }:
+    {
+      devShells.dev-pre-commit = config.pre-commit.devShell;
 
-        hooks = {
-          nixpkgs-fmt.enable = true;
-          statix.enable = true;
-          deadnix.enable = true;
+      pre-commit = {
+        settings = {
+          src = ./.;
 
-          cabal-fmt.enable = true;
-          fourmolu = {
-            enable = true;
-            excludes = [ "\.lhs" ];
+          hooks = {
+            nixpkgs-fmt.enable = true;
+            statix.enable = true;
+            deadnix.enable = true;
+
+            cabal-fmt.enable = true;
+            fourmolu = {
+              enable = true;
+              excludes = [ "\.lhs" ];
+            };
+            ormolu = {
+              settings.cabalDefaultExtensions = true;
+            };
+            hlint.enable = true;
+
+            yamllint.enable = true;
           };
-          ormolu = {
-            settings.cabalDefaultExtensions = true;
-          };
-          hlint.enable = true;
-
-          typos = {
-            enable = true;
-            excludes = [ "\.golden" "fourmolu.yaml" ];
-          };
-
-          yamllint.enable = true;
         };
       };
     };
-  };
 }

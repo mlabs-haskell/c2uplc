@@ -58,7 +58,6 @@
                 cabal = { };
                 haskell-language-server = { };
                 hlint = { };
-                cabal-fmt = { };
                 fourmolu = { };
                 hspec-discover = { };
                 markdown-unlit = { };
