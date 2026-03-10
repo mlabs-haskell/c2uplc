@@ -2,7 +2,7 @@
 
 {- HLINT ignore "Use camelCase" -}
 
-module Main (main, testCompileIO) where
+module Main (main, testCompileIO, opaqueIntro) where
 
 import Covenant.ASG
   ( ASG (ASG),
@@ -741,6 +741,11 @@ f mabPairIntFoo =
           )
        )
 -}
+
+opaqueIntro :: ASGBuilder Id
+opaqueIntro = testLam (dtype "Foo" []) $ do
+  one <- liftInt 1
+  AnId <$> ctor' "Foo" "I" [one]
 
 conformance_body2_builder :: ASGBuilder Id
 conformance_body2_builder = lam topLevelTy body

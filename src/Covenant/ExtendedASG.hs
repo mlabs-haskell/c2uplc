@@ -212,7 +212,7 @@ tyFixerFnId = TyFixerFnId <$> nextId
 
 -- Pattern Synonyms for matching
 pattern WrappedSrc :: Id -> ExtendedId
-pattern WrappedSrc i <- WrappedSrcId i
+pattern WrappedSrc i = WrappedSrcId i
 
 pattern IdentityFn :: Id -> ExtendedId
 pattern IdentityFn i = IdentityFnId i
