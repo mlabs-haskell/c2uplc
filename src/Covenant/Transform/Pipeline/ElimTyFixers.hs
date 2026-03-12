@@ -2,6 +2,9 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE StrictData #-}
 
+{- HLINT ignore "Redundant <$>" -}
+-- WHY DOES IT SUGGEST THIS IT NEVER EVER MAKES THINGS MORE READABLE
+
 module Covenant.Transform.Pipeline.ElimTyFixers
   ( transformTypeFixerNodes,
   )
@@ -17,6 +20,7 @@ import Covenant.ASG
     ValNodeInfo (App, Cata, DataConstructor, Lit, Match, Thunk),
     typeASGNode,
   )
+import Covenant.ArgDict (pValT)
 import Covenant.CodeGen.Stubs (MonadStub, stubId)
 import Covenant.Data (mapValT)
 import Covenant.DeBruijn (DeBruijn (S, Z))
@@ -32,7 +36,7 @@ import Covenant.ExtendedASG
     tyFixerFnId,
     unExtendedASG,
   )
-import Covenant.Index (ix0)
+import Covenant.Index (Count, intCount, ix0)
 import Covenant.Prim (OneArgFunc (BData, IData, ListData, MapData), TwoArgFunc (ConstrData))
 import Covenant.Transform.Common ()
 import Covenant.Transform.Pipeline.Common
@@ -43,7 +47,7 @@ import Covenant.Transform.Pipeline.Common
     syntheticLamNode,
   )
 import Covenant.Transform.Pipeline.Monad (Datatypes (Datatypes))
-import Covenant.Transform.TyUtils (applyArgs, substCompT)
+import Covenant.Transform.TyUtils (applyArgs, countToAbstractions, substCompT)
 import Covenant.Type
   ( AbstractTy (BoundAt),
     CompT (Comp0, Comp1, CompN),
@@ -64,7 +68,7 @@ import Covenant.Type
     integerT,
     tyvar,
   )
-import Covenant.Unsafe (Arg (UnsafeMkArg), CompNodeInfo (Builtin1Internal, Builtin2Internal), Id, ValNodeInfo (AppInternal))
+import Covenant.Unsafe (Arg (UnsafeMkArg), CompNodeInfo (Builtin1Internal, Builtin2Internal), Id, ValNodeInfo (AppInternal, ThunkInternal))
 import Data.Foldable
   ( traverse_,
   )
@@ -72,16 +76,17 @@ import Data.Kind (Type)
 import Data.List (find)
 import Data.Map (Map)
 import Data.Map qualified as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromJust)
 import Data.Row.Records (Rec)
 import Data.Row.Records qualified as R
 import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Debug.Trace (traceM)
-import Optics.Core (view)
+import Optics.Core (preview, view)
 
 {- Rewrites type fixer nodes into applications.
 
@@ -95,8 +100,8 @@ transformTypeFixerNodes ::
   ) =>
   m ()
 transformTypeFixerNodes = do
-  topSrcNode <- fst <$> eTopLevelSrcNode
-  go topSrcNode --  dtDict magicErr tyFixers
+  topSrcNode <- eTopLevelSrcNode
+  go (WrappedSrc topSrcNode) --  dtDict magicErr tyFixers
   where
     conjureFunction :: CompT AbstractTy -> m ASGNode
     conjureFunction compT = do
@@ -172,6 +177,13 @@ transformTypeFixerNodes = do
                     let cataFnPolyTy = view #fnTy dat
                     cataId <- tyFixerFnId
                     modify' $ mapField #tyFixers (M.insert (forgetExtendedId cataId) dat)
+                    -- TODO/FIXME: We should *NOT* get ahold of the handler types like this. We should do something
+                    --             extremely similar to what we do with the non-opaque case of `match` below, where we
+                    --             use the scrutinee (or the arg, here) and the result type to construct substitutions into the
+                    --             maximally polymorphic `match` function.
+                    --
+                    --             If we do things the way we do here, things blow up with an `ERROR` as a handler, when in principle
+                    --             that should be allowed.
                     handlerTypes <- traverse unsafeRefType (Vector.toList handlers)
                     scrutTy <- unsafeRefType arg
                     let cataFnConcrete = applyArgs cataFnPolyTy (scrutTy : handlerTypes)
@@ -191,22 +203,25 @@ transformTypeFixerNodes = do
                 lookupOpaqueRef scrut >>= \case
                   Just opaqueCtors -> do
                     traceM "match.opaque"
-                    handlersWithErrors <- mkOpaqueHandlers opaqueCtors handlers
+
                     -- we need to make a node for the "match on opaque" function. This is really just
                     -- the match function for Data, but we have to handle it differently for implementation reasons
                     syntheticMatchFnNode <- conjureFunction matchOpaquePolyTy
                     let subs = M.singleton (BoundAt Z ix0) valT -- WE MIGHT HAVE TO INC THE DB IN THE RES TY BY 1, I'm not sure
-                        opaqueMatchFnConcrete = substCompT id subs matchOpaquePolyTy
+                        opaqueMatchFnConcrete@(CompN _ (ArgsAndResult scrutAndHandlers _)) = substCompT id subs matchOpaquePolyTy
+                        concreteHandlerTypes = Vector.drop 1 scrutAndHandlers
+                    handlersWithErrors <- mkOpaqueHandlers opaqueCtors handlers concreteHandlerTypes
                     matchDataId <- stubId "matchData"
                     insertAndMarkVisited (TyFixerFn matchDataId) syntheticMatchFnNode
                     let newValNode = AppInternal matchDataId (Vector.cons scrut handlersWithErrors) Vector.empty opaqueMatchFnConcrete
                         newASGNode = AValNode valT newValNode
                     insertAndMarkVisited i newASGNode
+                    traverse_ goRef handlers
+                    goRef scrut
                   Nothing -> do
                     traceM "match.non-opaque"
                     matchId <- tyFixerFnId
                     scrutTy <- unsafeRefType scrut
-                    handlerTypes <- traverse unsafeRefType $ Vector.toList handlers
                     let tn = unsafeDatatypeName scrutTy
                     tyFixers <- gets (R..! #tyFixerData)
                     case view #matchData =<< M.lookup tn tyFixers of
@@ -216,7 +231,8 @@ transformTypeFixerNodes = do
                       Just dat -> do
                         let matchFnPolyTy = view #fnTy dat
                         modify' $ mapField #tyFixers (M.insert (forgetExtendedId matchId) dat)
-                        let matchFnConcrete = applyArgs matchFnPolyTy (scrutTy : handlerTypes)
+                        let subs = mkMatchSubs scrutTy valT
+                            matchFnConcrete = substCompT id subs matchFnPolyTy
                             newValNode = AppInternal (forgetExtendedId matchId) (Vector.cons scrut handlers) Vector.empty matchFnConcrete
                             newASGNode = AValNode valT newValNode
                         insertAndMarkVisited i newASGNode
@@ -368,8 +384,8 @@ transformTypeFixerNodes = do
               :--:> thunk0 (byteStringT :--:> ReturnT a')
               :--:> ReturnT a
 
-        mkOpaqueHandlers :: Set PlutusDataConstructor -> Vector.Vector Ref -> m (Vector.Vector Ref)
-        mkOpaqueHandlers opaqueCtors hs = do
+        mkOpaqueHandlers :: Set PlutusDataConstructor -> Vector.Vector Ref -> Vector.Vector (ValT AbstractTy) -> m (Vector.Vector Ref)
+        mkOpaqueHandlers opaqueCtors hs matchFnHandlerTypes = do
           {- If our comments are to be believed, the canonical order for handlers should be:
                  [ PlutusI,
                    PlutusB,
@@ -389,11 +405,18 @@ transformTypeFixerNodes = do
               -- this is the order of the (non-scrutinee) arguments to matchData, which lines up neither with the ord instance nor the
               -- order we expect the handlers to be given in (...we should have made these things line up...)
               allCtors2 = Vector.fromList [PlutusConstr, PlutusMap, PlutusList, PlutusI, PlutusB]
+              ctorsWithHandlerTypes = Vector.zip allCtors2 matchFnHandlerTypes
 
-          refToErrNode <- AnId <$> getErrNode
-          let handlersWithErrs = fmap (\x -> fromMaybe refToErrNode (M.lookup x orderedHandlers)) allCtors2
-          pure handlersWithErrs
+          traverse (\(x, ty) -> case M.lookup x orderedHandlers of Just hRef -> pure hRef; Nothing -> mkLazyErr ty) ctorsWithHandlerTypes
           where
+            mkLazyErr :: ValT AbstractTy -> m Ref
+            mkLazyErr hTy = do
+              errId <- findOrCreateNode (== AnError) WrappedSrc AnError
+              let newNode = AValNode hTy (ThunkInternal errId)
+              fresh <- nextId
+              insertAndMarkVisited (WrappedSrc fresh) newNode
+              pure (AnId fresh)
+
             goOrder :: Map PlutusDataConstructor Ref -> Set PlutusDataConstructor -> [PlutusDataConstructor] -> [Ref] -> Map PlutusDataConstructor Ref
             goOrder acc _ _ [] = acc
             goOrder acc _ [] _ = acc -- this can't happen
@@ -401,14 +424,26 @@ transformTypeFixerNodes = do
               | maybeNextCtor `S.member` thisTyCtors = goOrder (M.insert maybeNextCtor nextRef acc) thisTyCtors restCtors restRefs
               | otherwise = goOrder acc thisTyCtors restCtors (nextRef : restRefs)
 
-            -- this is inefficient but saves us from generating a large amount of error nodes we don't need if we already have one
-            getErrNode :: m Id
-            getErrNode = do
-              asg <- snd . unExtendedASG <$> getASG
-              case find (\x -> snd x == AnError) asg of
-                Nothing -> do
-                  -- we're just going to chuck it into the tree and pretend it's a normal source node
-                  errI <- nextId
-                  eInsert (WrappedSrc errI) AnError
-                  pure errI
-                Just (errI, _) -> pure errI
+{- This is a stupid helper that allows us to avoid some problematic calls to unsafeRefType (which blows up
+   if we try to read the type off an Error node).
+
+   We need to construct a set of substitutions for a polymorphic (type specific) `match` function from:
+     1) The scrutinee type
+     2) the return type of the match node
+
+   A match function should have a number of type variables equal to the number of parameters to the scrutinee type (which must
+   be a datatype), plus one (for the return type).
+-}
+mkMatchSubs :: ValT AbstractTy -> ValT AbstractTy -> Map AbstractTy (ValT AbstractTy)
+mkMatchSubs (Datatype _ args) res = M.fromList . Vector.toList . Vector.zip matchFnTyVars $ Vector.snoc args res
+  where
+    matchFnCount :: Count "tyvar"
+    matchFnCount = fromJust $ preview intCount (Vector.length args + 1)
+
+    matchFnTyVars :: Vector AbstractTy
+    matchFnTyVars = countToAbstractions matchFnCount
+mkMatchSubs t _ =
+  error $
+    "Cannot construct substitutions necessary for concretifying match function: Type "
+      <> pValT t
+      <> " is not a data type!"

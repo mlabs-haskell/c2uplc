@@ -41,6 +41,14 @@ import Data.Kind (Type)
 import Data.Map (Map)
 import Data.Map qualified as M
 
+{- TODO: This isn't really that useful anymore. We only really need to distinguish between
+         "Ids of things that actually exist in the ASG" and "Ids of things that serve as placeholders or point to stubs".
+
+         Originally, we used this to determine "let"-binding order, but we needed a lot of PLC stubs that can't exist
+         in the ASG and have their own extra-ASG dependencies, so the dependency monad for stubs (MonadStub stuff)
+         handles all of that. Also we do a top-down compilation now which actually performs lifting for things that are in the
+         ASG "for real" so this has no reason to not be simpler.
+-}
 data ExtendedId
   = -- The original Ids we get after deserializing
     WrappedSrcId Id
@@ -61,7 +69,11 @@ data ExtendedId
     TyFixerFnId Id
   deriving stock (Eq, Show)
 
-{- This is largely the reason to have ExtendedId.
+{- NOTE:  We don't need this functionality anymore and ExtendedId should be simplified or removed (see above).
+          I am leaving the comment in solely as a guide to help someone in the future (possibly myself)
+          understand what it was meant to do so as to help with removing it.
+
+   This is largely the reason to have ExtendedId.
 
    We want to add to our ASG and maintain the ability to look up nodes by their Id, but because we are forced to
    increment Ids from the original maximum ASG Id in order to generate fresh references, we need some way of
@@ -107,23 +119,22 @@ forgetExtendedId = \case
   EmbeddingId i -> i
   TyFixerFnId i -> i
 
--- The final argument is the maximum Id
-data ExtendedASG = ExtendedASG (Map ExtendedId ASGNode) (Map Id ExtendedId) Id
+-- First arg is the initial entry point, he final argument is the maximum Id
+data ExtendedASG = ExtendedASG Id (Map ExtendedId ASGNode) (Map Id ExtendedId) Id
 
 extendedNodes :: ExtendedASG -> Map ExtendedId ASGNode
-extendedNodes (ExtendedASG nodes _ _) = nodes
+extendedNodes (ExtendedASG _ nodes _ _) = nodes
 
 unExtendedASG :: ExtendedASG -> (Id, [(Id, ASGNode)])
-unExtendedASG (ExtendedASG nodes _ _) = (topSrcId, rawASG)
+unExtendedASG (ExtendedASG topId nodes _ _) = (topId, rawASG)
   where
-    topSrcId :: Id
-    topSrcId = forgetExtendedId . fst $ M.findMax nodes
     rawASG :: [(Id, ASGNode)]
     rawASG = first forgetExtendedId <$> M.toList nodes
 
 wrapASG :: Map Id ASGNode -> ExtendedASG
-wrapASG asg = ExtendedASG nodes idResolver (fst . M.findMax $ asg)
+wrapASG asg = ExtendedASG initTop nodes idResolver initTop
   where
+    initTop = fst . M.findMax $ asg
     nodes :: Map ExtendedId ASGNode
     nodes = M.mapKeys WrappedSrcId asg
     idResolver :: Map Id ExtendedId
@@ -134,10 +145,10 @@ class ExtendedKey a where
   eSafeNodeAt :: a -> ExtendedASG -> Maybe ASGNode
 
 instance ExtendedKey ExtendedId where
-  eSafeNodeAt eid (ExtendedASG m _ _) = M.lookup eid m
+  eSafeNodeAt eid (ExtendedASG _ m _ _) = M.lookup eid m
 
 instance ExtendedKey Id where
-  eSafeNodeAt i (ExtendedASG m n _) = M.lookup i n >>= flip M.lookup m
+  eSafeNodeAt i (ExtendedASG _ m n _) = M.lookup i n >>= flip M.lookup m
 
 -- | Unsafe
 eNodeAt ::
@@ -156,7 +167,7 @@ resolveExtended ::
   Id ->
   m ExtendedId
 resolveExtended i = do
-  ExtendedASG _ m _ <- getASG
+  ExtendedASG _ _ m _ <- getASG
   pure $ m M.! i
 
 -- There's probably a better way to do this w/ optics, but
@@ -184,13 +195,13 @@ instance (Monoid w) => MonadASG (RWS r w ExtendedASG) where
 
 -- test util
 runWithEmptyASG :: forall r. (forall m. (MonadASG m) => m r) -> r
-runWithEmptyASG f = evalState f (ExtendedASG M.empty M.empty (UnsafeMkId 0))
+runWithEmptyASG f = evalState f (ExtendedASG (UnsafeMkId 0) M.empty M.empty (UnsafeMkId 0))
 
 nextId :: forall (m :: Type -> Type). (MonadASG m) => m Id
 nextId = do
-  (ExtendedASG nodes resolver (UnsafeMkId s)) <- getASG
+  (ExtendedASG top nodes resolver (UnsafeMkId s)) <- getASG
   let newId = UnsafeMkId (s + 1)
-  putASG $ ExtendedASG nodes resolver newId
+  putASG $ ExtendedASG top nodes resolver newId
   pure newId
 
 -- Helpers to ensure we can only construct keys within the monad, so we *can't* screw up the maximum Id
@@ -210,6 +221,8 @@ embeddingId = EmbeddingId <$> nextId
 tyFixerFnId :: (MonadASG m) => m ExtendedId
 tyFixerFnId = TyFixerFnId <$> nextId
 
+-- DEPRECATED: These were originally unidirectional for safety but are basically useless now
+--             since we had allow unsafe construction.
 -- Pattern Synonyms for matching
 pattern WrappedSrc :: Id -> ExtendedId
 pattern WrappedSrc i = WrappedSrcId i
@@ -233,23 +246,23 @@ pattern TyFixerFn i = TyFixerFnId i
 
 -- If I wrote that ord instance right, this give us the entry point into the ORIGINAL asg.
 -- It should always return a WrappedSrcId
-eTopLevelSrcNode :: forall m. (MonadASG m) => m (ExtendedId, ASGNode)
+eTopLevelSrcNode :: forall m. (MonadASG m) => m Id
 eTopLevelSrcNode = do
-  ExtendedASG m _ _ <- getASG
-  pure . M.findMax $ m
+  ExtendedASG top _ _ _ <- getASG
+  pure top
 
 -- Besides creating two ASGs and intentionally mixing up the keys, this should all guarantee that
 -- collisions are totally impossible and that every node has a correct, informative ExtendedId
 eInsert :: forall m. (MonadASG m) => ExtendedId -> ASGNode -> m ()
 eInsert eid node = do
-  (ExtendedASG nodes resolver maxId) <- getASG
+  (ExtendedASG top nodes resolver maxId) <- getASG
   let nodes' = M.insert eid node nodes
       resolver' = M.insert (forgetExtendedId eid) eid resolver
-  putASG $ ExtendedASG nodes' resolver' maxId
+  putASG $ ExtendedASG top nodes' resolver' maxId
 
 removeEphemeralError :: ExtendedId -> ExtendedASG -> ExtendedASG
-removeEphemeralError eid (ExtendedASG nodes resolver maxId) = case eid of
+removeEphemeralError eid (ExtendedASG top nodes resolver maxId) = case eid of
   EphemeralError _ ->
     let nodes' = M.delete eid nodes
-     in ExtendedASG nodes' resolver maxId
+     in ExtendedASG top nodes' resolver maxId
   _somethingElse -> error $ "removeEphemeralError called with: " <> show _somethingElse <> ", which is not an ephemeral error ID"

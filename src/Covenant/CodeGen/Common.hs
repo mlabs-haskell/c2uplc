@@ -33,6 +33,7 @@ import Covenant.ExtendedASG
         TyFixerFn
       ),
     MonadASG (getASG),
+    eTopLevelSrcNode,
     extendedNodes,
     forgetExtendedId,
   )
@@ -327,10 +328,15 @@ runTopDownCompile ::
   CodeGen (Either CodeGenError (Term Name DefaultUni DefaultFun ()))
 runTopDownCompile plData = do
   eAsg <- getASG
+  topId <- eTopLevelSrcNode
   let emptyPrepSt = #onlySrcNodes .== mempty .+ #initTermScope .== mempty .+ #bind .== mempty
-      prepRec = execState (prepare plData eAsg) emptyPrepSt
-      nodes = prepRec R..! #onlySrcNodes
-      topId = fst $ M.findMax nodes
+  -- due to being boxed in by having ignored opaques + severe time constraints,
+  -- we have to do this dumb hack to be able to match on them.
+  matchDataId <- stubId "matchData"
+  matchDataFn <- resolveStub "matchData"
+  let prepRec = execState (prepare plData eAsg matchDataId matchDataFn) emptyPrepSt
+  let nodes = prepRec R..! #onlySrcNodes
+      -- topId = fst $ M.findMax nodes
       termScope = prepRec R..! #initTermScope
       repHandlers = plData R..! #repPolyHandlers
       doBinds = foldr (\(nm, term) acc -> pLet nm term . acc) id (prepRec R..! #bind)
@@ -343,6 +349,8 @@ runTopDownCompile plData = do
 prepare ::
   Rec CodeGenData ->
   ExtendedASG ->
+  Id ->
+  Term Name DefaultUni DefaultFun () ->
   State
     ( Rec
         ( "onlySrcNodes" .== Map Id ASGNode
@@ -351,16 +359,18 @@ prepare ::
         )
     )
     ()
-prepare plData eAsg = do
+prepare plData eAsg matchDataId matchDataFn = do
   modify $ R.update #onlySrcNodes (M.mapKeys forgetExtendedId srcNodes)
   traverse_ (go . forgetExtendedId) (M.keys specialNodes)
+  modify $ rModify (M.insert matchDataId matchDataFn) #initTermScope
+  modify $ rModify ((idToName matchDataId, matchDataFn) :) #bind
   modify $ rModify reverse #bind
   where
     (specialNodes, srcNodes) = M.partitionWithKey (\k _ -> isSynthNode k) eNodes
     eNodes = extendedNodes eAsg
     isSynthNode = \case
       IdentityFn _ -> True
-      EphemeralError _ -> True
+      EphemeralError _ -> False
       Projection _ -> True
       Embedding _ -> True
       TyFixerFn _ -> True

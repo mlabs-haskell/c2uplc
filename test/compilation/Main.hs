@@ -2,7 +2,7 @@
 
 {- HLINT ignore "Use camelCase" -}
 
-module Main (main, testCompileIO, opaqueIntro) where
+module Main (main, testCompileIO) where
 
 import Covenant.ASG
   ( ASG (ASG),
@@ -17,6 +17,7 @@ import Covenant.ASG
     cata,
     ctor,
     ctor',
+    dataConstructor,
     dtype,
     err,
     lam,
@@ -63,6 +64,7 @@ import Covenant.Type
     TyName,
     ValT (BuiltinFlat, Datatype),
     boolT,
+    byteStringT,
     integerT,
     tyvar,
   )
@@ -117,6 +119,9 @@ main =
         goTest "intro_map" mkMap
       , goTest "elim_map_1" matchMapEmpty
       , goTest "elim_map_2" matchMapNonEmpty
+      , -- opaque
+        shouldCompile "intro_opaque" (Vector.fromList conformanceDatatypes2) opaqueIntro
+      , shouldCompile "elim_opaque" (Vector.fromList conformanceDatatypes2) matchOpaque
       , -- conformance
         shouldCompile "conformance_1" (Vector.fromList conformanceDatatypes1) conformance_body1_builder
       , shouldCompile "conformance_2" (Vector.fromList conformanceDatatypes2) conformance_body2_builder
@@ -745,7 +750,15 @@ f mabPairIntFoo =
 opaqueIntro :: ASGBuilder Id
 opaqueIntro = testLam (dtype "Foo" []) $ do
   one <- liftInt 1
-  AnId <$> ctor' "Foo" "I" [one]
+  AnId <$> dataConstructor "Foo" "I" [one]
+
+matchOpaque :: ASGBuilder Id
+matchOpaque = testLam integerT $ do
+  one <- liftInt 1
+  opq <- AnId <$> dataConstructor "Foo" "I" [one]
+  bsHandler <- lazyLam (Comp0 $ byteStringT :--:> ReturnT integerT) $ liftInt 0
+  intHandler <- lazyLam (Comp0 $ integerT :--:> ReturnT integerT) $ liftInt 0
+  AnId <$> match opq [AnId intHandler, AnId bsHandler]
 
 conformance_body2_builder :: ASGBuilder Id
 conformance_body2_builder = lam topLevelTy body

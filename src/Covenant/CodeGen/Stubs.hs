@@ -169,6 +169,7 @@ import UntypedPlutusCore (DefaultFun, Term)
 defStubs :: forall m. (MonadStub m) => m ()
 defStubs = do
   _error
+  _lazyError
   -- identity fn
   _id
   -- Fix
@@ -353,21 +354,21 @@ _matchData = declare "matchData" $
   pFreshLam3' "dat" "goCtor" "goMap" $ \dat goCtor goMap ->
     pFreshLam3' "goList" "goI" "goB" $ \goList goI goB -> do
       goCtor' <- asCtor goCtor dat
-      pure $
+      pure . pForce $
         pBuiltin ChooseData
           # dat
-          # goCtor'
-          # (pForce goMap # (pBuiltin UnMapData # dat))
-          # (pForce goList # (pBuiltin UnListData # dat))
-          # (pForce goI # (pBuiltin UnIData # dat))
-          # (pForce goB # (pBuiltin UnBData # dat))
+          # pDelay goCtor'
+          # pDelay (pForce goMap # (pBuiltin UnMapData # dat))
+          # pDelay (pForce goList # (pBuiltin UnListData # dat))
+          # pDelay (pForce goI # (pBuiltin UnIData # dat))
+          # pDelay (pForce goB # (pBuiltin UnBData # dat))
   where
     asCtor ::
       Term Name DefaultUni DefaultFun () ->
       Term Name DefaultUni DefaultFun () ->
       m (Term Name DefaultUni DefaultFun ())
     asCtor goCtor scrut = do
-      pLetM' "ctorIx_ctorBody" (pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
+      pLetM' "ctorIx_ctorBody" (pDelay $ pBuiltin UnConstrData # scrut) $ \scrutAsIntDataPair -> do
         let ctorIx = pFst scrutAsIntDataPair
             ctorArgs = pSnd scrutAsIntDataPair
         pure $ pForce goCtor # ctorIx # ctorArgs
@@ -878,6 +879,11 @@ _error = do
   declare "error" $ pure (mkConstant () ())
   (_, _, i) <- stubData "error"
   eInsert (EphemeralError i) AnError
+
+_lazyError :: (MonadStub m) => m ()
+_lazyError = declare "lazyError" $ do
+  err <- resolveStub "error"
+  pure $ pDelay err
 
 -- We aren't putting the unique error here because it needs to be removed anyway and nothing
 -- at the PLC level depends upon it (it's a trick for mocking functions in the ASG)

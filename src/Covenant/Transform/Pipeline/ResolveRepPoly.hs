@@ -25,7 +25,7 @@ import Covenant.ASG
 import Covenant.CodeGen.Stubs (HandlerType (Embed, Proj), MonadStub)
 import Covenant.DeBruijn (DeBruijn (Z), asInt)
 import Covenant.ExtendedASG
-  ( ExtendedId,
+  ( ExtendedId (WrappedSrc),
     ExtendedKey,
     eInsert,
     eNodeAt,
@@ -111,7 +111,7 @@ resolveRepPoly ::
   , MonadState RepPolyHandlers m
   ) =>
   m ()
-resolveRepPoly = eTopLevelSrcNode >>= go . fst
+resolveRepPoly = eTopLevelSrcNode >>= (go . WrappedSrc)
   where
     traceError :: forall a. String -> m a
     traceError msg = do
