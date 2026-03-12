@@ -106,13 +106,13 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 -}
 data TyFixerFnData
   = TyFixerFnData
-      { _mfTyName :: TyName
-      , _mfEncoding :: DataEncoding
-      , _mfPolyType :: CompT AbstractTy
-      , _mfCompiled :: Term Name DefaultUni DefaultFun ()
-      , _mfTypeSchema :: TypeSchema
-      , _mfFunName :: Text
-      , _mfNodeKind :: TyFixerNodeKind
+      { _mfTyName :: TyName,
+        _mfEncoding :: DataEncoding,
+        _mfPolyType :: CompT AbstractTy,
+        _mfCompiled :: Term Name DefaultUni DefaultFun (),
+        _mfTypeSchema :: TypeSchema,
+        _mfFunName :: Text,
+        _mfNodeKind :: TyFixerNodeKind
       }
   | BuiltinTyFixer (CompT AbstractTy) BuiltinFnData
 
@@ -270,9 +270,9 @@ data TyFixerNodeKind = MatchNode | IntroNode | CataNode
 -}
 data TyFixerDataBundle
   = TyFixerDataBundle
-  { _introData :: Vector TyFixerFnData
-  , _matchData :: Maybe TyFixerFnData
-  , _cataData :: Maybe TyFixerFnData
+  { _introData :: Vector TyFixerFnData,
+    _matchData :: Maybe TyFixerFnData,
+    _cataData :: Maybe TyFixerFnData
   }
 
 instance

@@ -94,9 +94,9 @@ import Optics.Core (preview, view)
 -}
 transformTypeFixerNodes ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadState (Rec TransformState) m
-  , MonadReader Datatypes m
+  ( MonadStub m,
+    MonadState (Rec TransformState) m,
+    MonadReader Datatypes m
   ) =>
   m ()
 transformTypeFixerNodes = do
@@ -277,7 +277,7 @@ transformTypeFixerNodes = do
         goRef :: Ref -> m ()
         goRef = \case
           AnId child -> resolveExtended child >>= go
-          AnArg{} -> pure ()
+          AnArg {} -> pure ()
 
         -- Stuff for opaques
 

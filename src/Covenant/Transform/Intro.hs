@@ -82,9 +82,9 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 
 mkConstructorFunctions ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadReader Datatypes m
-  , MonadState RepPolyHandlers m
+  ( MonadStub m,
+    MonadReader Datatypes m,
+    MonadState RepPolyHandlers m
   ) =>
   TyName ->
   m (Vector TyFixerFnData)
@@ -175,9 +175,9 @@ mkConstructorFunctions tn =
 --       manually during the resolve poly rep step.
 builtinIntroForm ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadReader Datatypes m
-  , MonadState RepPolyHandlers m
+  ( MonadStub m,
+    MonadReader Datatypes m,
+    MonadState RepPolyHandlers m
   ) =>
   DataEncoding -> -- only need the encoding arg b/c main repo doesn't export right stuff
   TyName ->

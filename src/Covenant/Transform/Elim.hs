@@ -106,16 +106,16 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Name, Term)
 -- The ONLY case where we should end up with Nothing is something isomorphic to Void
 mkDestructorFunction ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadReader Datatypes m
-  , MonadState RepPolyHandlers m
+  ( MonadStub m,
+    MonadReader Datatypes m,
+    MonadState RepPolyHandlers m
   ) =>
   TyName ->
   m (Maybe TyFixerFnData)
 mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
     go :: DatatypeInfo AbstractTy -> m (Maybe TyFixerFnData)
-    go (DatatypeInfo OpaqueData{} _ _ _) = pure Nothing -- I think we can handle this later
+    go (DatatypeInfo OpaqueData {} _ _ _) = pure Nothing -- I think we can handle this later
     go (DatatypeInfo (DataDeclaration _ _ _ enc@(BuiltinStrategy _)) _ _ _) = Just <$> builtinElimForm tn enc
     go dtInfo = do
       let ogDecl = view #originalDecl dtInfo
@@ -181,7 +181,7 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
             (ValT AbstractTy, Term Name DefaultUni DefaultFun ()) ->
             (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           insertForce (v, t) = case v of
-            ThunkT{} -> (v, pForce t)
+            ThunkT {} -> (v, pForce t)
             _ -> (v, t)
           typedBranchHandlers :: Vector (ValT AbstractTy, Term Name DefaultUni DefaultFun ())
           typedBranchHandlers = insertForce <$> Vector.zip (Vector.drop 1 origMatchFnArgs) rawBranchHandlers
@@ -263,9 +263,9 @@ mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
 --       conjuring the "real" function types for the underlying PLC during the rep poly resolution pass
 builtinElimForm ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadReader Datatypes m
-  , MonadState RepPolyHandlers m
+  ( MonadStub m,
+    MonadReader Datatypes m,
+    MonadState RepPolyHandlers m
   ) =>
   TyName ->
   DataEncoding ->

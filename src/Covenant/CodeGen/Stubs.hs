@@ -295,10 +295,9 @@ _cataList = declare "cataList" $ do
 
 -- nil is really really annoying. we have to know the fully concretified type b/c reasons
 
-{- | This produces the correct empty list term directly and doesn't declare anything.
- After pre-evaluation this will just reduce to the constant anyway. A 'Nothing' means
- we cannot construct a builtin list of elements of that type.
--}
+-- | This produces the correct empty list term directly and doesn't declare anything.
+-- After pre-evaluation this will just reduce to the constant anyway. A 'Nothing' means
+-- we cannot construct a builtin list of elements of that type.
 mkNil ::
   forall m.
   (MonadStub m) =>
@@ -391,9 +390,9 @@ _matchPair = declare "matchPair" $
 
 data StubContext
   = StubContext
-  { _bindings :: Map Text (Name, Term Name DefaultUni DefaultFun (), Id) -- not everything actually needs an Id
-  , _deps :: Map Text (Set Text) -- an adjacency list, basically
-  , _depsAcc :: Set Text
+  { _bindings :: Map Text (Name, Term Name DefaultUni DefaultFun (), Id), -- not everything actually needs an Id
+    _deps :: Map Text (Set Text), -- an adjacency list, basically
+    _depsAcc :: Set Text
   }
 
 data StubError
@@ -406,12 +405,12 @@ data StubError
 
 newtype StubM m a = StubM (ExceptT StubError (StateT StubContext m) a)
   deriving
-    ( Functor
-    , Applicative
-    , Monad
-    -- I am intentionally not defining a MonadState instance so it doesn't "clash"
-    -- with other instances. This will live at the bottom of a transformer stack with
-    -- RWS on top. (I suspect a MonadState instance would lead to annoying fundeps inference problems)
+    ( Functor,
+      Applicative,
+      Monad
+      -- I am intentionally not defining a MonadState instance so it doesn't "clash"
+      -- with other instances. This will live at the bottom of a transformer stack with
+      -- RWS on top. (I suspect a MonadState instance would lead to annoying fundeps inference problems)
     )
     via (ExceptT StubError (StateT StubContext m))
 
@@ -518,10 +517,9 @@ declare nm mkStub =
       stub <- mkStub
       _bindStub nm stub
 
-{- | This gets a variable reference to the stub, it does not
- return the body of the stub. Compilation of the bodies is handled "automagically"
- by compileStubM
--}
+-- | This gets a variable reference to the stub, it does not
+-- return the body of the stub. Compilation of the bodies is handled "automagically"
+-- by compileStubM
 resolveStub :: (MonadStub m) => Text -> m (Term Name DefaultUni DefaultFun ())
 resolveStub nmTxt = do
   (pName, _, _) <- stubData nmTxt
@@ -1028,17 +1026,17 @@ mkSelectNil uni = declare declNm $ pFreshLam' "selectNil_depth" $ \depth ->
   pure $
     pCase
       depth
-      [ mkList 0
-      , mkList 1
-      , mkList 2
-      , mkList 3
-      , mkList 4
-      , mkList 5
-      , mkList 6
-      , mkList 7
-      , mkList 8
-      , mkList 9
-      , mkList 10
+      [ mkList 0,
+        mkList 1,
+        mkList 2,
+        mkList 3,
+        mkList 4,
+        mkList 5,
+        mkList 6,
+        mkList 7,
+        mkList 8,
+        mkList 9,
+        mkList 10
       ]
   where
     declNm :: Text

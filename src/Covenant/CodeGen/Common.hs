@@ -638,7 +638,7 @@ getBindableSubTerms dbOffset = \case
               Lam r -> crossLamX (LambdaId nodeId) $ goRef (dbOff + 1) r
               _ -> pure M.empty
             AValNode _ valNodeInfo -> case valNodeInfo of
-              Lit{} -> pure $ M.singleton nodeId thisNode
+              Lit {} -> pure $ M.singleton nodeId thisNode
               App fnId args _ _ -> do
                 fnBinds <- crossApp (AppId fnId) $ go dbOff fnId
                 argBinds <- M.unions <$> traverse (goRef dbOff) args
@@ -648,7 +648,7 @@ getBindableSubTerms dbOffset = \case
       where
         goRef :: Int -> Ref -> CodeGenM (Map Id ASGNode)
         goRef dbDist r = case r of
-          AnArg{} -> pure M.empty
+          AnArg {} -> pure M.empty
           AnId childId ->
             alreadyCompiled childId >>= \case
               True -> pure mempty
@@ -701,7 +701,7 @@ withLocation :: forall r. Id -> (ASTRef -> CodeGenM r) -> CodeGenM r
 withLocation i f = do
   lamScope <- fmap (\(LambdaId x) -> x) <$> getLamScope
   appScope <- fmap (\(AppId x) -> x) <$> getAppScope
-  let ref = ASTRef{underLams = lamScope, underApps = appScope, appNodeId = i}
+  let ref = ASTRef {underLams = lamScope, underApps = appScope, appNodeId = i}
   f ref
 
 data LiftStatus

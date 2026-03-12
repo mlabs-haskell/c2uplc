@@ -68,8 +68,8 @@ evalTerm' ::
   Term Name DefaultUni DefaultFun () ->
   ( Either
       (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
-      (Term Name DefaultUni DefaultFun ())
-  , [Text]
+      (Term Name DefaultUni DefaultFun ()),
+    [Text]
   )
 evalTerm' t =
   case Cek.runCek defaultCekParametersForTesting Cek.counting Cek.logEmitter t of

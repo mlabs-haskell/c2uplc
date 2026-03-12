@@ -87,44 +87,44 @@ main =
   defaultMain $
     testGroup
       "compilation"
-      [ shouldFail "throw_an_error" mempty throwAnError
-      , shouldCompile "addTwoNumbers" mempty addTwoNumbers
-      , shouldCompile "mkJust_SOP" [maybeSOP] mkJust
-      , shouldCompile "mkJust_Data" [maybeData] mkJust
-      , shouldCompile "matchMaybeInt_SOP" [maybeSOP] matchOnMaybeInt
-      , shouldCompile "matchMaybeInt_Data" [maybeData] matchOnMaybeInt
-      , shouldCompile "intro_enum" [abcT] introEnum
-      , shouldCompile "elim_enum" [abcT] elimEnum
-      , shouldCompile "intro_product_sop" [productSOP] introProduct
-      , shouldCompile "intro_product_data" [productData] introProduct
-      , shouldCompile "intro_newtype" [myNewtype] introNewtype
-      , shouldCompile "elim_newtype" [myNewtype] elimNewtype
-      , -- list
-        goTest "nil_concrete" mkNilConcrete
-      , goTest "cons_concrete" mkConsConcrete
-      , goTest "match_list_empty" matchListEmpty
-      , goTest "match_list_non_empty" matchListNonEmpty
-      , goTest "list_cata" cataList
-      , -- pair
-        goTest "intro_pair" mkPair
-      , goTest "elim_pair" matchPair
-      , -- data
-        goTest "data_I" mkData_I
-      , goTest "data_B" mkData_B
-      , goTest "data_List" mkData_List
-      , goTest "data_Map" mkData_Map
-      , goTest "data_constr_1" mkData_Constr_Nullary
-      , goTest "data_constr_2" mkData_Constr_Unary
-      , -- map
-        goTest "intro_map" mkMap
-      , goTest "elim_map_1" matchMapEmpty
-      , goTest "elim_map_2" matchMapNonEmpty
-      , -- opaque
-        shouldCompile "intro_opaque" (Vector.fromList conformanceDatatypes2) opaqueIntro
-      , shouldCompile "elim_opaque" (Vector.fromList conformanceDatatypes2) matchOpaque
-      , -- conformance
-        shouldCompile "conformance_1" (Vector.fromList conformanceDatatypes1) conformance_body1_builder
-      , shouldCompile "conformance_2" (Vector.fromList conformanceDatatypes2) conformance_body2_builder
+      [ shouldFail "throw_an_error" mempty throwAnError,
+        shouldCompile "addTwoNumbers" mempty addTwoNumbers,
+        shouldCompile "mkJust_SOP" [maybeSOP] mkJust,
+        shouldCompile "mkJust_Data" [maybeData] mkJust,
+        shouldCompile "matchMaybeInt_SOP" [maybeSOP] matchOnMaybeInt,
+        shouldCompile "matchMaybeInt_Data" [maybeData] matchOnMaybeInt,
+        shouldCompile "intro_enum" [abcT] introEnum,
+        shouldCompile "elim_enum" [abcT] elimEnum,
+        shouldCompile "intro_product_sop" [productSOP] introProduct,
+        shouldCompile "intro_product_data" [productData] introProduct,
+        shouldCompile "intro_newtype" [myNewtype] introNewtype,
+        shouldCompile "elim_newtype" [myNewtype] elimNewtype,
+        -- list
+        goTest "nil_concrete" mkNilConcrete,
+        goTest "cons_concrete" mkConsConcrete,
+        goTest "match_list_empty" matchListEmpty,
+        goTest "match_list_non_empty" matchListNonEmpty,
+        goTest "list_cata" cataList,
+        -- pair
+        goTest "intro_pair" mkPair,
+        goTest "elim_pair" matchPair,
+        -- data
+        goTest "data_I" mkData_I,
+        goTest "data_B" mkData_B,
+        goTest "data_List" mkData_List,
+        goTest "data_Map" mkData_Map,
+        goTest "data_constr_1" mkData_Constr_Nullary,
+        goTest "data_constr_2" mkData_Constr_Unary,
+        -- map
+        goTest "intro_map" mkMap,
+        goTest "elim_map_1" matchMapEmpty,
+        goTest "elim_map_2" matchMapNonEmpty,
+        -- opaque
+        shouldCompile "intro_opaque" (Vector.fromList conformanceDatatypes2) opaqueIntro,
+        shouldCompile "elim_opaque" (Vector.fromList conformanceDatatypes2) matchOpaque,
+        -- conformance
+        shouldCompile "conformance_1" (Vector.fromList conformanceDatatypes1) conformance_body1_builder,
+        shouldCompile "conformance_2" (Vector.fromList conformanceDatatypes2) conformance_body2_builder
       ]
   where
     goTest ::
@@ -272,8 +272,8 @@ maybeT =
   DataDeclaration
     "Maybe"
     count1
-    [ Constructor "Nothing" []
-    , Constructor "Just" [tyvar Z ix0]
+    [ Constructor "Nothing" [],
+      Constructor "Just" [tyvar Z ix0]
     ]
 
 maybeSOP :: DataDeclaration AbstractTy
@@ -288,9 +288,9 @@ abcT =
   DataDeclaration
     "ABC"
     count0
-    [ Constructor "A" []
-    , Constructor "B" []
-    , Constructor "C" []
+    [ Constructor "A" [],
+      Constructor "B" [],
+      Constructor "C" []
     ]
     (PlutusData EnumData)
 
@@ -300,8 +300,8 @@ _myListT =
   DataDeclaration
     "MyList"
     count1
-    [ Constructor "MyNil" []
-    , Constructor "MyCons" [tyvar Z ix0, Datatype "MyList" [tyvar Z ix0]]
+    [ Constructor "MyNil" [],
+      Constructor "MyCons" [tyvar Z ix0, Datatype "MyList" [tyvar Z ix0]]
     ]
 
 _myListSOP :: DataDeclaration AbstractTy

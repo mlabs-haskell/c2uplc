@@ -91,10 +91,10 @@ mapField l f r = R.update l (f (r R..! l)) r
 -- I dunno what the point of this was
 newtype MetaM r a = MetaM (State (Rec r) a)
   deriving
-    ( Functor
-    , Applicative
-    , Monad
-    , MonadState (Rec r)
+    ( Functor,
+      Applicative,
+      Monad,
+      MonadState (Rec r)
     )
     via (State (Rec r))
 

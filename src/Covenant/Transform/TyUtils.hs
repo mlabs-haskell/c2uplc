@@ -104,7 +104,7 @@ collectRigids =
       ThunkT compT -> local (+ 1) $ do
         let argSchema = compTArgSchema compT
         mconcat <$> traverse go (Vector.toList argSchema)
-      BuiltinFlat{} -> pure S.empty
+      BuiltinFlat {} -> pure S.empty
       Datatype _ args -> mconcat <$> traverse go (Vector.toList args)
 
 {- This is a kind of improvised unification where we know that one side is necessarily more polymorphic than the other
@@ -162,7 +162,7 @@ cleanup origFn@(CompN cnt (ArgsAndResult args result)) = case substCompT id subs
         if resolved `Set.member` allOriginalVars
           then pure $ Set.singleton a
           else pure Set.empty
-      BuiltinFlat{} -> pure Set.empty
+      BuiltinFlat {} -> pure Set.empty
       ThunkT (CompN _ (ArgsAndResult thunkArgs thunkRes)) -> local (+ 1) $ do
         let toTraverse = Vector.toList $ Vector.snoc thunkArgs thunkRes
         Set.unions <$> traverse collectLocalVars toTraverse

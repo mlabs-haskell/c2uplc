@@ -106,9 +106,9 @@ import Optics.Core (review)
 -}
 resolveRepPoly ::
   forall (m :: Type -> Type).
-  ( MonadStub m
-  , MonadReader (Rec ConcretifyCxt) m
-  , MonadState RepPolyHandlers m
+  ( MonadStub m,
+    MonadReader (Rec ConcretifyCxt) m,
+    MonadState RepPolyHandlers m
   ) =>
   m ()
 resolveRepPoly = eTopLevelSrcNode >>= (go . WrappedSrc)
@@ -138,12 +138,12 @@ resolveRepPoly = eTopLevelSrcNode >>= (go . WrappedSrc)
     goRef :: Ref -> m ()
     goRef = \case
       AnId i -> resolveExtended i >>= go
-      AnArg{} -> pure ()
+      AnArg {} -> pure ()
     withLocation :: Id -> (ASTRef -> m r) -> m r
     withLocation anId f = do
       lamScope <- fmap (\(LambdaId x) -> x) <$> asks (R..! #callPath)
       appScope <- fmap (\(AppId x) -> x) <$> asks (R..! #appPath)
-      let ref = ASTRef{underLams = lamScope, underApps = appScope, appNodeId = anId}
+      let ref = ASTRef {underLams = lamScope, underApps = appScope, appNodeId = anId}
       f ref
     dbBindingSite :: DeBruijn -> m LambdaId
     dbBindingSite db = do
@@ -224,7 +224,7 @@ resolveRepPoly = eTopLevelSrcNode >>= (go . WrappedSrc)
         Just (TyFixerFnData tn enc _polyTyNoHandlers _compiled schema _nm kind) -> do
           -- we need to extract the "function type with handlers added" from the schema, which in this branch has to be a data schema
           (polyWithHandlers, _handlerArgPosDict) <- case schema of
-            SOPSchema{} -> traceError $ "SOP schema mismatch in " <> show tn <> " " <> show enc
+            SOPSchema {} -> traceError $ "SOP schema mismatch in " <> show tn <> " " <> show enc
             DataSchema ty dict -> pure (ty, dict)
           let CompN _ (ArgsAndResult polyArgsWithHandlers _) = polyWithHandlers
               CompN _ (ArgsAndResult concreteArgsNoHandlers _) = cFunTy

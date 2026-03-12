@@ -174,8 +174,8 @@ crudePrettyASG nodes =
     go i node =
       align . group $
         ( vcat
-            [ prettyId i <+> ":" <+> prettyNodeTy node
-            , prettyId i <+> "=" <+> prettyNodeBody node
+            [ prettyId i <+> ":" <+> prettyNodeTy node,
+              prettyId i <+> "=" <+> prettyNodeBody node
             ]
             <> hardline
         )
