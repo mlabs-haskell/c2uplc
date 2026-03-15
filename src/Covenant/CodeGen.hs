@@ -1,17 +1,17 @@
-module Covenant.CodeGen
-  ( compile,
+module Covenant.CodeGen (
+    compile,
     evalTerm,
     compilePretty,
     CodeGenError,
-  )
+)
 where
 
 -- N.B. *WE* have two different things called `ConstrData`
 
-import Covenant.CodeGen.Common
-  ( CodeGenError (WrapStubError),
+import Covenant.CodeGen.Common (
+    CodeGenError (WrapStubError),
     runTopDownCompile,
-  )
+ )
 import Covenant.ExtendedASG (wrapASG)
 import Covenant.JSON (CompilationUnit (CompilationUnit))
 import Covenant.Transform (transformASG)
@@ -29,9 +29,9 @@ import UntypedPlutusCore (DefaultFun, DefaultUni, Term)
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
 
 compilePretty ::
-  forall (ann :: Type).
-  CompilationUnit ->
-  Either CodeGenError (Doc ann)
+    forall (ann :: Type).
+    CompilationUnit ->
+    Either CodeGenError (Doc ann)
 compilePretty = fmap pretty . compile
 
 {- Add optimization pass after UPLC generation
@@ -40,10 +40,10 @@ compilePretty = fmap pretty . compile
 -}
 compile :: CompilationUnit -> Either CodeGenError (Term Name DefaultUni DefaultFun ())
 compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runCodeGen (wrapASG asg) $ do
-  cgData <- transformASG datatypes
-  runTopDownCompile cgData >>= \case
-    Left cgErr -> error $ "Compilation error during code generation: " <> show cgErr
-    Right aTerm -> pure aTerm
+    cgData <- transformASG datatypes
+    runTopDownCompile cgData >>= \case
+        Left cgErr -> error $ "Compilation error during code generation: " <> show cgErr
+        Right aTerm -> pure aTerm
   where
     datatypes :: Datatypes
     datatypes = Datatypes $ unsafeMkDatatypeInfos (Vector.toList datatypesRaw)
@@ -54,23 +54,23 @@ compile (CompilationUnit datatypesRaw asg _version) = first WrapStubError $ runC
 -- or the evaluated term
 
 evalTerm ::
-  Term Name DefaultUni DefaultFun () ->
-  Either String (Term Name DefaultUni DefaultFun ())
+    Term Name DefaultUni DefaultFun () ->
+    Either String (Term Name DefaultUni DefaultFun ())
 evalTerm t = case errOrRes of
-  Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log'
-  Right res -> pure res
+    Left anErr -> Left $ "Failure!\n  Eval Exception: " <> show anErr <> "\n  Logs: " <> show log'
+    Right res -> pure res
   where
     _result :: (Either (Cek.CekEvaluationException Name DefaultUni DefaultFun) (Term Name DefaultUni DefaultFun ()), [Text])
     _result@(errOrRes, log') = evalTerm' t
 
 -- no budget, don't care yet
 evalTerm' ::
-  Term Name DefaultUni DefaultFun () ->
-  ( Either
-      (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
-      (Term Name DefaultUni DefaultFun ())
-  , [Text]
-  )
+    Term Name DefaultUni DefaultFun () ->
+    ( Either
+        (Cek.CekEvaluationException Name PLC.DefaultUni PLC.DefaultFun)
+        (Term Name DefaultUni DefaultFun ())
+    , [Text]
+    )
 evalTerm' t =
-  case Cek.runCek defaultCekParametersForTesting Cek.counting Cek.logEmitter t of
-    (errOrRes, _, logs) -> (errOrRes, logs)
+    case Cek.runCek defaultCekParametersForTesting Cek.counting Cek.logEmitter t of
+        (errOrRes, _, logs) -> (errOrRes, logs)

@@ -115,7 +115,7 @@ mkDestructorFunction ::
 mkDestructorFunction tn@(TyName tyNameInner) = lookupDatatypeInfo tn >>= go
   where
     go :: DatatypeInfo AbstractTy -> m (Maybe TyFixerFnData)
-    go (DatatypeInfo OpaqueData{} _ _ _) = error "TODO Opaque eliminators"
+    go (DatatypeInfo OpaqueData{} _ _ _) = pure Nothing -- I think we can handle this later
     go (DatatypeInfo (DataDeclaration _ _ _ enc@(BuiltinStrategy _)) _ _ _) = Just <$> builtinElimForm tn enc
     go dtInfo = do
         let ogDecl = view #originalDecl dtInfo

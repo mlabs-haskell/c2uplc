@@ -3,7 +3,7 @@
 
 module Covenant.Transform (transformASG) where
 
-import Covenant.ExtendedASG (MonadASG (getASG))
+import Covenant.ExtendedASG (MonadASG (getASG)) -- , unExtendedASG)
 import Covenant.Transform.Pipeline.Common (
     CodeGenData,
     ConcretifyCxt,
@@ -20,6 +20,9 @@ import Data.Row.Records qualified as R
 import Data.Set qualified as S
 import Data.Vector qualified as Vector
 
+-- import Debug.Trace (traceM)
+-- import Covenant.ArgDict (crudePrettyASG')
+
 transformASG :: Datatypes -> CodeGen (Rec CodeGenData)
 transformASG dtDict = do
     (tyFixerData, repPolyHandlers) <- runPassNoErrors dtDict initRepPolyHandlers $ do
@@ -33,6 +36,7 @@ transformASG dtDict = do
                 .+ #tyFixers .== M.empty
 
     asgBundle1 <- snd <$> runPassNoErrors dtDict transformState transformTypeFixerNodes
+    traceASG "anf"
     let initConcretifyCxt :: Rec ConcretifyCxt
         initConcretifyCxt =
             #context .== M.empty
@@ -46,3 +50,11 @@ transformASG dtDict = do
                 .+ #tyFixers .== (initConcretifyCxt R..! #tyFixers) -- these shouldn't change
                 .+ #repPolyHandlers .== finalRepHandlers
     pure codeGenData
+
+traceASG :: (MonadASG m) => String -> m ()
+traceASG _msg = pure () {- do
+                        asg <- snd . unExtendedASG <$> getASG
+                        traceM "--------------"
+                        traceM msg
+                        traceM $ crudePrettyASG' (M.fromList asg)
+                        -}

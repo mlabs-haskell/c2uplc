@@ -92,7 +92,7 @@ mkConstructorFunctions tn =
     lookupDatatypeInfo tn >>= \dtInfo -> case view #originalDecl dtInfo of
         DataDeclaration _tn cnt ctors enc -> do
             Vector.ifoldM (go dtInfo cnt enc) Vector.empty ctors
-        OpaqueData _ _ -> error "TODO: intro forms for opaque"
+        OpaqueData _ _ -> pure mempty -- error "TODO: intro forms for opaque"
   where
     go ::
         DatatypeInfo AbstractTy ->
