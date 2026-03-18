@@ -168,24 +168,20 @@ data CodeGenError
     deriving stock (Show, Eq)
 
 data ArgResolutionFailReason
-    = {- | We got @Nothing@ when we tried to look up the context corresponding to the
-      @Id@ of the parent node where the arg was found.
-      -}
+    = -- | We got @Nothing@ when we tried to look up the context corresponding to the
+      --       @Id@ of the parent node where the arg was found.
       ParentIdLookupFailed Id
-    | {- | The @Id@ of the parent node of the arg we are examining should index a @Vector Id@ but instead
-      indexes a @Vector Name@.
-      -}
+    | -- | The @Id@ of the parent node of the arg we are examining should index a @Vector Id@ but instead
+      --       indexes a @Vector Name@.
       ParentIdPointsAtNames Id
     | -- | The @DeBruijn@ index of the arg points to an out of bounds lambda.
       DBIndexOutOfBounds DeBruijn
-    | {- | The @Id@ of the lambda corresponding to the @DeBruijn@ index does not correspond to anything in our
-      argument resolution dictionary.
-      -}
+    | -- | The @Id@ of the lambda corresponding to the @DeBruijn@ index does not correspond to anything in our
+      --       argument resolution dictionary.
       NoBindingContext Id
-    | {- | The @Id@ of the Lambda that the DeBruijn points at corresponds to an entry in our
-      argument resolution diciontary, but that entry is a @Vector Id@ and not the @Vector Name@
-      that we need
-      -}
+    | -- | The @Id@ of the Lambda that the DeBruijn points at corresponds to an entry in our
+      --       argument resolution diciontary, but that entry is a @Vector Id@ and not the @Vector Name@
+      --       that we need
       LamIdPointsAtContext Id
     deriving stock (Show, Eq)
 
