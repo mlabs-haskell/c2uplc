@@ -11,6 +11,7 @@ source-repository-package
   type: git
   location: https://github.com/mlabs-haskell/covenant
   tag: 0879664e8295bd387c027c5344fa36557f0efa32
+  --sha256: 1q94hk3pmmlr8bjysgry8y0bb97nkil98z5nj4xs3xy8mjpmzkr5
 
 -- Note (Koz, 15/08/2025): For the next person who needs to bump Plutus
 -- dependencies, this is the order of operations:
