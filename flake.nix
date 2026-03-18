@@ -54,6 +54,7 @@
               withHaddock = true;
               exactDeps = false;
               shellHook = config.pre-commit.installationScript;
+              nativeBuildInputs = [ config.pre-commit.settings.package ];
               tools = {
                 cabal = { };
                 haskell-language-server = { };
