@@ -6,6 +6,9 @@ A code generator for UPLC from Covenant IR.
 
 # How do I use this?
 
+To build the executable, run `cabal build exe:c2uplc`. To run it, use `cabal
+exec c2uplc`.
+
 # What do I need?
 
 # License
