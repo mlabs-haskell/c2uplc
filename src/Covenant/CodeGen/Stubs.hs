@@ -208,6 +208,9 @@ defStubs = do
         -- Unit
         _projUnit
         _embedUnit
+        -- Pair
+        _projPair
+        _embedPair
         -- BLS stuff (possibly superfluous)
         _proj_BLS12_381_G1
         _embed_BLS12_381_G1
